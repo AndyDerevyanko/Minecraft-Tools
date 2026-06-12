@@ -12,9 +12,6 @@ if not os.path.exists(IN_PATH):
     print("ERROR: file not found")
     exit(1)
 
-with open(IN_PATH, "r") as text:
-    lines = text.read()
-
 custom = True if input("Does your world have any custom (modded) blocks? : ").lower()== "y" else False
 
 (INDICES, (BLOCK_SIZE, CHUNK, *BYTES)) \

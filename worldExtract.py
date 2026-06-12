@@ -157,13 +157,7 @@ def process_core(k, core_count, mca_list_length, output_queue, config):
                     #properly grab chunk to stream blocks
                     
                     stream = chunk.stream_blocks(section=section_y)
-                    raw_count = 0
-                    non_air_count = 0
                     for idx, block in enumerate(stream):
-                        raw_count += 1
-                        if not block.id.endswith('air'):
-                            non_air_count += 1
-
                         base_name = block.id
 
                         if base_name.endswith('air'):
@@ -700,7 +694,7 @@ def main():
             print(f"Remapped core {k+1}/{core_count} took: {(time.time() - start_time):.2f} seconds")
 
     #Now, we just need to merge all the core files into one and make the master dictionary files
-    print(f"Merging each cores' files into one big block file in: {os.getcwd()}, Stage 5/6\n")
+    print(f"Merging each cores' files into one big block file in: {os.getcwd()}, Stage 4/6\n")
 
     #now merge all files
     with open(f"{base_folder_name}.world", "wb") as block_file:
@@ -714,10 +708,11 @@ def main():
 
         for k in range(len(processes)):
             f_name = f"process_{k}"
-            f = open(f_name, "rb") 
 
             if os.path.getsize(f_name) == 0:
                 continue
+
+            f = open(f_name, "rb")
 
             while True:
                 blocks = f.read(CHUNK*64) #read 64 chunks at a time
@@ -731,7 +726,7 @@ def main():
             #os.remove(f_name)
 
     #now handle all supplementaries
-    print(f"Outputting all supplementaries: {os.getcwd()}, Stage 6/6\n")
+    print(f"Outputting all supplementaries: {os.getcwd()}, Stage 5/6\n")
     print(f"Creating BlockID key file in {os.getcwd()}\n")
     g = open(f"{base_folder_name}.blockIds", "w")
     for value, key in master_id_dict.items():

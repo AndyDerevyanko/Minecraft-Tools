@@ -9,7 +9,7 @@ def main():
 
     folder_name = folder_name.strip('\"').strip('\'')
 
-    file_name = os.path.dirname(folder_name)
+    base_folder_name = os.path.basename(folder_name)
 
     game_version = []
 
@@ -149,12 +149,12 @@ def main():
             return False
     
     #1.17- format:
-    def p_1_17 (): 
+    def p_1_17 ():
         palette = section['Palette']
         if len(palette) == 1 and palette[0]['Name'].value.endswith('air'):
-            return False
-        else:
             return True
+        else:
+            return False
 
     is_air_checker = p_1_18 if new_or_old else p_1_17 #check if section is fully air or not
 
@@ -329,20 +329,20 @@ def main():
 
 
     print("Creating BlockID key file\n")
-    g = open(f"{file_name}.blockIds.txt", "w")
+    g = open(f"{base_folder_name}.blockIds.txt", "w")
     for key, value in block_id_dict.items():
         g.write(f"{key}={value}\n")
     g.close()        
 
     print("Creating BlockProperties key file\n")
-    h = open(f"{file_name}.blockProperties.txt", "w")
+    h = open(f"{base_folder_name}.blockProperties.txt", "w")
     for key, value in block_property_dict.items():
         h.write(f"{key}={value}\n")
     h.close()
 
     if custom:
         print("Creating BlockNamespaces key file\n")
-        k = open(f"{file_name}.blockNamespaces.txt", "w")
+        k = open(f"{base_folder_name}.blockNamespaces.txt", "w")
         for key, value in block_namespace_dict.items():
             k.write(f"{key}={value}\n")
         k.close()
