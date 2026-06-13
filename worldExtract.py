@@ -362,17 +362,18 @@ def main():
     import ctypes
 
     kernel32 = ctypes.windll.kernel32
-    kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), 0x0080) #no quick edit nonsense (for console, windows)
+    handle = kernel32.GetStdHandle(-10)
+    mode = ctypes.c_ulong()
+    kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+    kernel32.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080) #disable quick edit, keep all other input flags
 
-    folder_name = r"C:\Users\andyt\AppData\Roaming\.minecraft\saves\TESTING WORLD"
-    #folder_name = input("Input World Path (ex. C:\\Users\\username\\AppData\\Roaming\\.minecraft\\saves\\world): ")
+    folder_name = input("Input World Path (ex. C:\\Users\\username\\AppData\\Roaming\\.minecraft\\saves\\world): ")
 
     folder_name = folder_name.strip().strip('\"').strip('\'').rstrip('\\').strip()
 
     base_folder_name = os.path.basename(folder_name)
 
-    dimension = ".\\"
-    #dimension = input("Enter dimension folder (if NOT custom (modded) dimension, use:  overworld: \'.\\\', nether: \'DIM-1\', end: \'DIM1\'): ").lower()
+    dimension = input("Enter dimension folder (if NOT custom (modded) dimension, use:  overworld: \'.\\\', nether: \'DIM-1\', end: \'DIM1\'): ").lower()
 
     dimension = dimension.strip().strip('\"').strip('\'').strip('\\').strip('/').strip()
 
@@ -383,31 +384,19 @@ def main():
 
     mca_dir_list = [f for f in os.listdir(folder_name) if f.lower().endswith('.mca')] #make sure we use only mca files
 
-    upper_lim = 256
-    #upper_lim = int(input("Enter the max height to which should be scanned (Usually 256 or 320 depending on version) (exclusive): "))
-                
-    lower_lim = 0
-    #lower_lim = int(input("Enter the min height to which should be scanned (Usually 0 or -64 depending on version) (inclusive): "))
-    
-    scan_all = False
-    #scan_all = False if input("Scan entire world or define Horizontal limits? (Y: Define limits, N: Scan whole world) (NOTE: defining limits will likely be faster and take significantly less memory): ").lower()== "y" else True
+    upper_lim = int(input("Enter the max height to which should be scanned (Usually 256 or 320 depending on version) (exclusive): "))
+
+    lower_lim = int(input("Enter the min height to which should be scanned (Usually 0 or -64 depending on version) (inclusive): "))
+
+    scan_all = True if input("Scan entire world or define Horizontal limits? (Y: Scan whole world, N: Define limits): ").lower() == "y" else False
 
     if not scan_all:
-        
-        lowerX_lim = 112
-        #lowerX_lim = int(input("Enter the min X (inclusive):"))
+        lowerX_lim = int(input("Enter the min X (inclusive): "))
+        upperX_lim = int(input("Enter the max X (inclusive): "))
+        lowerZ_lim = int(input("Enter the min Z (inclusive): "))
+        upperZ_lim = int(input("Enter the max Z (inclusive): "))
 
-        upperX_lim = 127 
-        #upperX_lim = int(input("Enter the max X (inclusive):"))
-        
-        lowerZ_lim = 0
-        #lowerZ_lim = int(input("Enter the min Z (inclusive):"))
-
-        upperZ_lim = 15   
-        #upperZ_lim = int(input("Enter the max Z (inclusive):"))
-
-    custom = False
-    #custom = True if input("Are there custom (modded) blocks in your world? (Y/N): ").lower()== "y" else False
+    custom = True if input("Are there custom (modded) blocks in your world? (Y/N): ").lower() == "y" else False
     
     #give this one a "sign" bit that will be used to determine whether empty or not
     #NOTE: NUM_BLOCKS_PROPS_BYTES IS USED FOR BOTH PROPERTIES AND BLOCKS
@@ -723,7 +712,7 @@ def main():
                 block_file.write(blocks)
 
             f.close()
-            #os.remove(f_name)
+            os.remove(f_name)
 
     #now handle all supplementaries
     print(f"Outputting all supplementaries: {os.getcwd()}, Stage 5/6\n")

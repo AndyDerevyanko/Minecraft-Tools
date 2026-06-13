@@ -1,0 +1,36 @@
+{
+  "stats": {
+    "minecraft:crafted": {
+      "minecraft:air": 0,
+      "minecraft:map": 12
+    },
+    "minecraft:custom": {
+      "minecraft:traded_with_villager": 12,
+      "minecraft:talked_to_villager": 5,
+      "minecraft:time_since_rest": 11797,
+      "minecraft:walk_one_cm": 6013,
+      "minecraft:leave_game": 1,
+      "minecraft:walk_under_water_one_cm": 2476,
+      "minecraft:play_time": 11797,
+      "minecraft:damage_dealt": 20,
+      "minecraft:jump": 294,
+      "minecraft:time_since_death": 11797,
+      "minecraft:drop": 1,
+      "minecraft:sprint_one_cm": 26104,
+      "minecraft:swim_one_cm": 1448,
+      "minecraft:total_world_time": 21135,
+      "minecraft:fly_one_cm": 197474,
+      "minecraft:walk_on_water_one_cm": 1655,
+      "minecraft:sneak_time": 354
+    },
+    "minecraft:used": {
+      "minecraft:snow": 1,
+      "minecraft:packed_ice": 274,
+      "minecraft:ice": 6
+    },
+    "minecraft:dropped": {
+      "minecraft:emerald": 64
+    }
+  },
+  "DataVersion": 4790
+}
