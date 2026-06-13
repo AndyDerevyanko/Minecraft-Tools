@@ -3,7 +3,8 @@ import sys
 import glob
 import subprocess
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
+TREE_REMOVER  = os.path.join(SCRIPT_DIR, "c++", "treeRemover.exe")
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +21,6 @@ class Tee:
     def flush(self):
         self._stdout.flush()
         self._file.flush()
-    # input() needs readline on sys.stdin, not stdout — keep stdin untouched
     def isatty(self):
         return self._stdout.isatty()
 
@@ -87,16 +87,26 @@ def validate_test(inputs):
 
 
 def test_meta(cmd_str, inputs):
-    """Return (world_base, world_file, obj_file, custom, renderer_cmd)."""
-    py_prefix    = cmd_str.rsplit('worldExtract.py', 1)[0].strip()
-    world_base   = os.path.basename(inputs[0].strip())
-    world_file   = os.path.join(SCRIPT_DIR, f"{world_base}.world")
-    obj_file     = os.path.join(SCRIPT_DIR, f"{world_base}.obj")
-    scan_ans     = inputs[4].strip().lower()
-    custom_idx   = 9 if scan_ans == 'n' else 5
-    custom       = inputs[custom_idx].strip().lower() == 'y'
-    renderer_cmd = f"{py_prefix} renderer.py"
-    return world_base, world_file, obj_file, custom, renderer_cmd
+    """Return a dict with all derived paths and commands for the pipeline."""
+    py_prefix  = cmd_str.rsplit('worldExtract.py', 1)[0].strip()
+    world_base = os.path.basename(inputs[0].strip())
+    scan_ans   = inputs[4].strip().lower()
+    custom_idx = 9 if scan_ans == 'n' else 5
+    custom     = inputs[custom_idx].strip().lower() == 'y'
+
+    def p(*parts): return os.path.join(SCRIPT_DIR, *parts)
+
+    return {
+        "world_base":        world_base,
+        "world_file":        p(f"{world_base}.world"),
+        "obj_file":          p(f"{world_base}.obj"),
+        "blockids_file":     p(f"{world_base}.blockIds"),
+        "blockprops_file":   p(f"{world_base}.blockProperties"),
+        "trees_world_file":  p(f"{world_base}_trees.world"),
+        "trees_obj_file":    p(f"{world_base}_trees.obj"),
+        "custom":            custom,
+        "renderer_cmd":      f"{py_prefix} renderer.py",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +151,11 @@ def _run():
 
     print(f"Found {len(test_paths)} test file(s).\n")
 
+    tree_remover_available = os.path.isfile(TREE_REMOVER)
+    if not tree_remover_available:
+        print(f"  WARNING: treeRemover.exe not found at {TREE_REMOVER}")
+        print(f"           treeRemover steps will be skipped.\n")
+
     # ---- validation pass ----
     print("=" * 55)
     print("VALIDATION")
@@ -179,36 +194,67 @@ def _run():
     results = {}
 
     for idx, (name, cmd_str, inputs) in enumerate(valid_tests):
-        _, world_file, obj_file, custom, renderer_cmd = test_meta(cmd_str, inputs)
+        meta = test_meta(cmd_str, inputs)
 
         print("=" * 55)
         print(f"[{idx+1}/{len(valid_tests)}]  {name}")
         print("=" * 55)
 
-        # step 1: worldExtract
+        # ── step 1: worldExtract ──────────────────────────────
         print("  worldExtract.py ...")
         ok, out = pipe_run(cmd_str, inputs, SCRIPT_DIR)
         print(out)
-        if not ok or not os.path.exists(world_file):
+        if not ok or not os.path.exists(meta["world_file"]):
             print("  ^^^ worldExtract FAILED ^^^")
             results[name] = "ERROR  (worldExtract failed)"
             continue
 
-        # step 2: renderer
-        renderer_inputs = [world_file, "y" if custom else "n"]
-        print("  renderer.py ...")
-        ok, out = pipe_run(renderer_cmd, renderer_inputs, SCRIPT_DIR)
+        # ── step 2: renderer on raw world ────────────────────
+        renderer_inputs = [meta["world_file"], "y" if meta["custom"] else "n"]
+        print("  renderer.py  (raw world) ...")
+        ok, out = pipe_run(meta["renderer_cmd"], renderer_inputs, SCRIPT_DIR)
         print(out)
-        if not ok or not os.path.exists(obj_file):
-            print("  ^^^ renderer FAILED ^^^")
-            results[name] = "ERROR  (renderer failed)"
+        if not ok or not os.path.exists(meta["obj_file"]):
+            print("  ^^^ renderer (raw) FAILED ^^^")
+            results[name] = "ERROR  (renderer/raw failed)"
             continue
 
-        # step 3: open viewer
-        print(f"  Opening {os.path.basename(obj_file)} ...")
-        open_viewer(obj_file)
+        # ── step 3: open raw OBJ (reference view) ────────────
+        print(f"  Opening raw render: {os.path.basename(meta['obj_file'])} ...")
+        open_viewer(meta["obj_file"])
 
-        # step 4: human verdict
+        # ── step 4: treeRemover ───────────────────────────────
+        if tree_remover_available:
+            tr_inputs = [
+                meta["world_file"],
+                meta["blockids_file"],
+                meta["blockprops_file"],
+            ]
+            print("  treeRemover.exe ...")
+            ok, out = pipe_run(TREE_REMOVER, tr_inputs, SCRIPT_DIR)
+            print(out)
+            if not ok or not os.path.exists(meta["trees_world_file"]):
+                print("  ^^^ treeRemover FAILED ^^^")
+                results[name] = "ERROR  (treeRemover failed)"
+                continue
+
+            # ── step 5: renderer on trees world ──────────────
+            trees_renderer_inputs = [meta["trees_world_file"], "y" if meta["custom"] else "n"]
+            print("  renderer.py  (trees) ...")
+            ok, out = pipe_run(meta["renderer_cmd"], trees_renderer_inputs, SCRIPT_DIR)
+            print(out)
+            if not ok or not os.path.exists(meta["trees_obj_file"]):
+                print("  ^^^ renderer (trees) FAILED ^^^")
+                results[name] = "ERROR  (renderer/trees failed)"
+                continue
+
+            # ── step 6: open trees OBJ ───────────────────────
+            print(f"  Opening tree render: {os.path.basename(meta['trees_obj_file'])} ...")
+            open_viewer(meta["trees_obj_file"])
+        else:
+            print("  (treeRemover skipped — exe not found)")
+
+        # ── step 7: human verdict ─────────────────────────────
         while True:
             ans = input(f"\n  Pass? (y/n): ").strip().lower()
             if ans in ('y', 'n'):

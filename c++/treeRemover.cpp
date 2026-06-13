@@ -2405,6 +2405,65 @@ int main()
     for (auto tree : trees)
         tree->printObj(debugOut);
 
+    // derive output stem from worldName (strip extension)
+    std::string outStem = worldName;
+    {
+        auto dot = outStem.rfind('.');
+        if (dot != std::string::npos)
+            outStem = outStem.substr(0, dot);
+    }
+
+    // write binary _trees.world in the same format as worldExtract output
+    {
+        std::ofstream outWorld(outStem + "_trees.world", std::ios::binary);
+        if (customWorld)
+            outWorld << "namespace bytes: " << NS_BYTES << "\n";
+        outWorld << "id/prop bytes: " << ID_PROP_BYTES << "\n";
+        outWorld << "x coord bytes: " << X_BYTES << "\n";
+        outWorld << "y coord bytes: " << Y_BYTES << "\n";
+        outWorld << "z coord bytes: " << Z_BYTES << "\n";
+
+        auto wLE = [](std::ofstream &f, uint64_t val, int n) {
+            for (int i = 0; i < n; i++)
+                f.put((char)((val >> (8 * i)) & 0xFF));
+        };
+        auto enc = [](int val, int n) -> uint64_t {
+            return val < 0 ? ((uint64_t)(-val) | (1ULL << (n * 8 - 1))) : (uint64_t)val;
+        };
+        auto writeBlock = [&](const block &bl) {
+            if (customWorld) wLE(outWorld, 0, NS_BYTES);
+            wLE(outWorld, (uint64_t)bl.type, ID_PROP_BYTES);
+            wLE(outWorld, (uint64_t)(bl.prop < 0 ? 0 : bl.prop), ID_PROP_BYTES);
+            wLE(outWorld, enc(bl.x, X_BYTES), X_BYTES);
+            wLE(outWorld, enc(bl.y, Y_BYTES), Y_BYTES);
+            wLE(outWorld, enc(bl.z, Z_BYTES), Z_BYTES);
+        };
+
+        for (auto tree : trees) {
+            Layer *p = tree->head;
+            while (p != nullptr) {
+                for (const auto &bl : p->blocks) writeBlock(bl);
+                p = p->next;
+            }
+        }
+        for (auto obj : foilage) {
+            Layer *p = obj->head;
+            while (p != nullptr) {
+                for (const auto &bl : p->blocks) writeBlock(bl);
+                p = p->next;
+            }
+        }
+    }
+
+    // copy blockIds so renderer can find {outStem}_trees.blockIds
+    {
+        std::ifstream src(worldBlockIDs, std::ios::binary);
+        std::ofstream dst(outStem + "_trees.blockIds");
+        dst << src.rdbuf();
+    }
+
+    std::cout << "Tree data written to " << outStem << "_trees.world" << std::endl;
+
     // close all world files
     world.close();
     blockIDs.close();
