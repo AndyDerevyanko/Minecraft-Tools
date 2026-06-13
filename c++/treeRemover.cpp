@@ -16,7 +16,6 @@
 #include <stack>
 
 #define TREE_TYPE_COUNT 11
-#define TREE_ORIENTATION_COUNT 11
 
 // properties file works differently than others (value-key based), so we store the types of varieties we are checking for here.
 std::string treeVarietyIDs[TREE_TYPE_COUNT] = {
@@ -31,11 +30,6 @@ std::string treeVarietyIDs[TREE_TYPE_COUNT] = {
     "pale_oak",
     "crimson",
     "warped"};
-
-std::string treeOrientationIDs[TREE_ORIENTATION_COUNT] = {
-    "x",
-    "y",
-    "z"};
 
 enum xyz
 {
@@ -402,19 +396,19 @@ public:
     }
 };
 
-// set ID values to search for what define the Tree blocks
-int wood = -1, log = -1, leaves = -1;
+// block type ID sets for each tree-material category
+std::unordered_set<int> woodTypes, logTypes, leafTypes;
 
-// contains all possible leaf and log orientations/varieties
-// key: prop # from block, data: 2-wide array of <variety, axis>
-std::unordered_map<int, std::array<int, 2>> treeBlockProperties;
+// block type ID → variety index (oak=0, spruce=1, ...)
+std::unordered_map<int, int> blockVariety;
 
-// for easier debugging when dereferencing this internal array
-enum treeBlockPropertiesIndex
-{
-    VARIETY_ = 0,
-    AXIS_ = 1
-};
+// prop ID → axis (X_/Y_/Z_); only entries with an axis property appear here
+std::unordered_map<int, int> propAxis;
+
+bool isWoodOrLog(int t) { return woodTypes.count(t) || logTypes.count(t); }
+bool isAnyTreeBlock(int t) { return woodTypes.count(t) || logTypes.count(t) || leafTypes.count(t); }
+int getAxis(int prop) { auto it = propAxis.find(prop); return it != propAxis.end() ? it->second : -1; }
+int getVariety(int type) { auto it = blockVariety.find(type); return it != blockVariety.end() ? it->second : -1; }
 
 class Tree : public Object
 {
@@ -440,7 +434,7 @@ public:
     {
         count()++;
         treeID = treeInstances++;
-        variety = treeBlockProperties[b.prop][VARIETY_];
+        variety = getVariety(b.type);
     }
 
     Tree() : Object()
@@ -456,9 +450,9 @@ public:
 
     bool stumpCheck(block b)
     {
-        if (b.type == wood || b.type == log)
+        if (isWoodOrLog(b.type))
             return true;
-        else if (b.type == leaves)
+        else if (leafTypes.count(b.type))
             return false;
         else
         {
@@ -490,8 +484,39 @@ public:
     }
 };
 
-// get all block properties at once
-std::array<int, 3> getXYZ(std::string line)
+// ── binary reading helpers ────────────────────────────────────────────────────
+
+int parseAxisFromPropString(const std::string &propStr)
+{
+    size_t pos = propStr.find("axis=");
+    if (pos == std::string::npos) return -1;
+    pos += 5;
+    if (pos < propStr.size()) {
+        if (propStr[pos] == 'x') return X_;
+        if (propStr[pos] == 'y') return Y_;
+        if (propStr[pos] == 'z') return Z_;
+    }
+    return -1;
+}
+
+uint64_t readLE(const uint8_t *buf, int numBytes)
+{
+    uint64_t val = 0;
+    for (int i = 0; i < numBytes; i++)
+        val |= (uint64_t)(unsigned char)buf[i] << (8 * i);
+    return val;
+}
+
+int decodeCoord(uint64_t raw, int numBytes)
+{
+    uint64_t signBit = 1ULL << (numBytes * 8 - 1);
+    if (raw & signBit)
+        return -(int)(raw & ~signBit);
+    return (int)raw;
+}
+
+// kept only for unused legacy uses — remove if desired
+std::array<int, 3> getXYZ_UNUSED(std::string line)
 {
     int x = 0, y = 0, z = 0;
     bool xPos = true, yPos = true, zPos = true;
@@ -555,8 +580,8 @@ std::array<int, 3> getXYZ(std::string line)
     return {x, y, z};
 }
 
-// get all block properties at once
-block getBlock(const std::string &line)
+// legacy text-format parsers — no longer called
+block getBlock_UNUSED(const std::string &line)
 {
     block output = {}; // create block to store output
     size_t i = 0;
@@ -605,8 +630,7 @@ block getBlock(const std::string &line)
     return output;
 }
 
-// get x from block on line
-int getX(const std::string &line)
+int getX_UNUSED(const std::string &line)
 {
     int output = 0;
     bool positive = true; // multiplier depending on whether coord is negative or not
@@ -633,8 +657,7 @@ int getX(const std::string &line)
 
     return positive ? output : -output;
 }
-// get y from block on line
-int getY(const std::string &line)
+int getY_UNUSED(const std::string &line)
 {
     int output = 0;
     bool positive = true; // multiplier depending on whether coord is negative or not
@@ -1004,8 +1027,8 @@ int main()
     std::cout << "Please enter world block Properties list + extension (ex. myworldblockproperties.txt): ";
     std::cin >> worldBlockProperties;
 
-    // open all world files
-    std::ifstream world(worldName);
+    // open all world files (world in binary because it has a text header then raw bytes)
+    std::ifstream world(worldName, std::ios::binary);
     std::ifstream blockIDs(worldBlockIDs);
     std::ifstream blockProperties(worldBlockProperties);
 
@@ -1024,32 +1047,46 @@ int main()
     // set ID values for all blocks that the stump of a Tree can be planted on
     std::unordered_set<int> stumpableBlocks;
 
-    // go thru block IDS to get logs and leaves
+    // format: "{numericID}={blockName}"
+    auto endsWith = [](const std::string &s, const std::string &suffix) -> bool {
+        return s.size() >= suffix.size() &&
+               s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    // go thru block IDs to categorise tree blocks and build stumpable/natural sets
     while (std::getline(blockIDs, line))
     {
-        std::string blockName;
         size_t pos = line.find('=');
+        if (pos == std::string::npos) { std::cerr << "error in blockID file" << std::endl; continue; }
 
-        if (pos != std::string::npos)
-            blockName = line.substr(0, pos);
-        else
-            std::cerr << "error in blockID file" << std::endl;
+        // numeric ID is before '=', block name is after '='
+        int numericID = 0;
+        for (size_t k = 0; k < pos; k++)
+            numericID = numericID * 10 + (line[k] - '0');
 
-        auto setID = [&]()
-        {
-            int var = 0;
-            for (auto i : line.substr(pos + 1))
-                var = var * 10 + (i - '0');
-            return var;
+        std::string blockName = line.substr(pos + 1);
+
+        // categorise tree blocks by suffix, variety by prefix match
+        auto findVariety = [&]() -> int {
+            for (int v = 0; v < TREE_TYPE_COUNT; v++)
+                if (blockName.substr(0, treeVarietyIDs[v].size()) == treeVarietyIDs[v])
+                    return v;
+            return -1;
         };
 
-        // setIDs once block found
-        if (blockName == "wood")
-            wood = setID();
-        if (blockName == "log")
-            log = setID();
-        if (blockName == "leaves")
-            leaves = setID();
+        if (endsWith(blockName, "_log")) {
+            logTypes.insert(numericID);
+            blockVariety[numericID] = findVariety();
+        } else if (blockName == "crimson_stem" || blockName == "warped_stem") {
+            logTypes.insert(numericID);
+            blockVariety[numericID] = findVariety();
+        } else if (endsWith(blockName, "_wood") || endsWith(blockName, "_hyphae")) {
+            woodTypes.insert(numericID);
+            blockVariety[numericID] = findVariety();
+        } else if (endsWith(blockName, "_leaves")) {
+            leafTypes.insert(numericID);
+            blockVariety[numericID] = findVariety();
+        }
 
         // set natural blockIDs in overworld
         if (
@@ -1060,7 +1097,7 @@ int main()
             blockName == "stone" || blockName == "granite" || blockName == "diorite" || blockName == "andesite" || blockName == "deepslate" || blockName == "tuff" || blockName == "calcite" || blockName == "bedrock" || blockName == "obsidian" || blockName == "crying_obsidian" ||
             blockName == "coal_ore" || blockName == "iron_ore" || blockName == "copper_ore" || blockName == "gold_ore" || blockName == "redstone_ore" || blockName == "lapis_ore" || blockName == "diamond_ore" || blockName == "emerald_ore" ||
             blockName == "nether_gold_ore" || blockName == "nether_quartz_ore" || blockName == "ancient_debris" ||
-            blockName == "log" || blockName == "leaves" || blockName == "sapling" ||
+            isAnyTreeBlock(numericID) || endsWith(blockName, "_sapling") ||
             blockName == "plant" || blockName == "double_plant" || blockName == "dead_bush" ||
             blockName == "vine" || blockName == "glow_lichen" || blockName == "hanging_roots" || blockName == "spore_blossom" ||
             blockName == "big_dripleaf" || blockName == "small_dripleaf" || blockName == "pink_petals" ||
@@ -1079,10 +1116,10 @@ int main()
             blockName == "cobblestone" || blockName == "mossy_cobblestone" ||
             blockName == "stone_bricks" || blockName == "mossy_stone_bricks" || blockName == "cracked_stone_bricks" ||
             blockName == "infested_block" || blockName == "spawner" || blockName == "chest" || blockName == "iron_bars" ||
-            blockName == "slab" || blockName == "stairs" || blockName == "fence" ||
+            endsWith(blockName, "_slab") || endsWith(blockName, "_stairs") || endsWith(blockName, "_fence") ||
             blockName == "end_portal_frame" || blockName == "trial_spawner" || blockName == "vault")
         {
-            naturalBlocks.insert(setID());
+            naturalBlocks.insert(numericID);
         }
 
         if (blockName == "dirt" || blockName == "grass_block" || blockName == "coarse_dirt" ||
@@ -1091,56 +1128,93 @@ int main()
             blockName == "mycelium" || blockName == "farmland" || blockName == "clay" ||
             blockName == "crimson_nylium" || blockName == "warped_nylium")
         {
-            stumpableBlocks.insert(setID());
+            stumpableBlocks.insert(numericID);
         }
     }
 
-    // get world height range selected based on max and min heights present
-    int max = INT_MIN;
-    int min = INT_MAX;
+    // read binary world header: [namespace bytes: N\n] id/prop bytes: N\n x/y/z coord bytes: N\n
+    auto parseHeaderLine = [](const std::string &hLine) -> int {
+        size_t pos = hLine.rfind(' ');
+        int val = 0;
+        for (size_t k = (pos == std::string::npos ? 0 : pos + 1); k < hLine.size(); k++)
+            if (hLine[k] >= '0' && hLine[k] <= '9')
+                val = val * 10 + (hLine[k] - '0');
+        return val;
+    };
 
-    // so we know how many slots we need for each layer
-    int xMax = INT_MIN;
-    int xMin = INT_MAX;
+    std::string hLine;
+    std::getline(world, hLine);
+    bool customWorld = (hLine.find("namespace") != std::string::npos);
 
-    int zMax = INT_MIN;
-    int zMin = INT_MAX;
+    int NS_BYTES = 0, ID_PROP_BYTES, X_BYTES, Y_BYTES, Z_BYTES;
+    if (customWorld) {
+        NS_BYTES = parseHeaderLine(hLine);
+        std::getline(world, hLine); ID_PROP_BYTES = parseHeaderLine(hLine);
+    } else {
+        ID_PROP_BYTES = parseHeaderLine(hLine);
+    }
+    { std::string tmp; std::getline(world, tmp); X_BYTES = parseHeaderLine(tmp); }
+    { std::string tmp; std::getline(world, tmp); Y_BYTES = parseHeaderLine(tmp); }
+    { std::string tmp; std::getline(world, tmp); Z_BYTES = parseHeaderLine(tmp); }
 
-    // go thru file until we reach end (get all x,y,z max/min values)
-    while (std::getline(world, line))
+    std::streampos binaryStart = world.tellg();
+    int BLOCK_SIZE = (customWorld ? NS_BYTES : 0) + 2 * ID_PROP_BYTES + X_BYTES + Y_BYTES + Z_BYTES;
+    int coordsOff  = (customWorld ? NS_BYTES : 0) + 2 * ID_PROP_BYTES;
+
+    // get world height range and extents from a first binary pass
+    int max = INT_MIN, min = INT_MAX;
+    int xMax = INT_MIN, xMin = INT_MAX;
+    int zMax = INT_MIN, zMin = INT_MAX;
+
     {
-        auto XYZ = getXYZ(line);
-        if (min > XYZ[1])
-            min = XYZ[1];
-        if (xMin > XYZ[0])
-            xMin = XYZ[0];
-        if (zMin > XYZ[2])
-            zMin = XYZ[2];
-        if (max < XYZ[1])
-            max = XYZ[1];
-        if (xMax < XYZ[0])
-            xMax = XYZ[0];
-        if (zMax < XYZ[2])
-            zMax = XYZ[2];
+        std::vector<uint8_t> buf(BLOCK_SIZE);
+        while (world.read(reinterpret_cast<char *>(buf.data()), BLOCK_SIZE))
+        {
+            int off = coordsOff;
+            int x = decodeCoord(readLE(buf.data() + off, X_BYTES), X_BYTES); off += X_BYTES;
+            int y = decodeCoord(readLE(buf.data() + off, Y_BYTES), Y_BYTES); off += Y_BYTES;
+            int z = decodeCoord(readLE(buf.data() + off, Z_BYTES), Z_BYTES);
+            if (y < min) min = y;
+            if (y > max) max = y;
+            if (x < xMin) xMin = x;
+            if (x > xMax) xMax = x;
+            if (z < zMin) zMin = z;
+            if (z > zMax) zMax = z;
+        }
     }
 
-    // go back to start
-    world.clear(); // clear EOF/fails
-    world.seekg(0, std::ios::beg);
-
-    // this section loads all possible leaf and log orientations/varieties
-    // REMEMBER: (from above main)
-    // key: prop # from block, data: 2-wide array of <variety, axis>
-    // std::unordered_map <int, std::array<int, 2>> treeBlockProperties;
-
+    // blockProperties format: "{propID}={key=val,...}"  — extract axis if present
     while (std::getline(blockProperties, line))
     {
-        std::array<int, 3> triple = tree_varietyTag_OrientationTag(line);
-        std::array<int, 3> invalid = {-1, -1, -1};
-        if (triple != invalid)
+        size_t pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        int propID = 0;
+        for (size_t k = 0; k < pos; k++)
+            propID = propID * 10 + (line[k] - '0');
+        int axis = parseAxisFromPropString(line.substr(pos + 1));
+        if (axis != -1)
+            propAxis[propID] = axis;
+    }
+
+    // second pass: load all relevant blocks grouped by Y level
+    world.clear();
+    world.seekg(binaryStart);
+
+    std::unordered_map<int, std::vector<block>> blocksByY;
+    {
+        std::vector<uint8_t> buf(BLOCK_SIZE);
+        int typeOff = customWorld ? NS_BYTES : 0;
+        while (world.read(reinterpret_cast<char *>(buf.data()), BLOCK_SIZE))
         {
-            std::array<int, 2> theseProperties{triple[0], triple[1]};
-            treeBlockProperties[triple[2]] = (std::array<int, 2>(theseProperties));
+            block b;
+            b.type = (int)readLE(buf.data() + typeOff,                   ID_PROP_BYTES);
+            b.prop = (int)readLE(buf.data() + typeOff + ID_PROP_BYTES,   ID_PROP_BYTES);
+            int off = coordsOff;
+            b.x = decodeCoord(readLE(buf.data() + off, X_BYTES), X_BYTES); off += X_BYTES;
+            b.y = decodeCoord(readLE(buf.data() + off, Y_BYTES), Y_BYTES); off += Y_BYTES;
+            b.z = decodeCoord(readLE(buf.data() + off, Z_BYTES), Z_BYTES);
+            if (isAnyTreeBlock(b.type) || stumpableBlocks.count(b.type))
+                blocksByY[b.y].push_back(b);
         }
     }
 
@@ -1174,35 +1248,15 @@ int main()
 
         bool start = false; // turns on once we get past first layer
 
-        bool end = false; // figure out if we are on our last layer
-
-        // assign first block
-        std::getline(world, line);
-        block b = getBlock(line);
-
-        // handle layers one by one
-        while (!end)
+        // handle layers one by one, top to bottom
+        for (; level >= min; level--)
         {
-            // loop thru world
-            while (true)
+            // populate thisLayer from pre-grouped blocksByY
             {
-                // put all blocks from this layer into array
-                if (b.type == wood || b.type == leaves || b.type == log || stumpableBlocks.find(b.type) != stumpableBlocks.end())
-                    thisLayer[b.x - xMin + xSize * (b.z - zMin)] = new block(b); // NOTE: we need to translate those coordinates to our positive-only array coords
-
-                std::getline(world, line);
-                end = world.eof();
-
-                if (!end)
-                {
-                    // load block into b if we are NOT past last layer
-                    b = getBlock(line);
-
-                    if (b.y != level)
-                        break;
-                }
-                else
-                    break;
+                auto it = blocksByY.find(level);
+                if (it != blocksByY.end())
+                    for (const auto &b : it->second)
+                        thisLayer[b.x - xMin + xSize * (b.z - zMin)] = new block(b);
             }
 
             // ALLOCATIONS FOR THIS LAYER (we point old layer to it)
@@ -1259,12 +1313,12 @@ int main()
                                             int addressT = i + xSize * j;
 
                                             // if this is indeed a treeBlock, we must add it to the tree of the ID
-                                            bool isTreeBlock = bl->type == wood || bl->type == leaves || bl->type == log;
+                                            bool isTreeBlock = isAnyTreeBlock(bl->type);
 
                                             // possible conditions for these blocks to be added to the tree of PREVIOUS layer:
                                             //  1. we are registering a tree block and its type aligns,
                                             //  OR 2. we are registering a stumpable block that is DIRECTLY below a log that is of orientation y.
-                                            bool matchedTreeBlock = isTreeBlock && treeBlockProperties[bl->prop][VARIETY_] == lastLayerVarieties[addressT];
+                                            bool matchedTreeBlock = isTreeBlock && getVariety(bl->type) == lastLayerVarieties[addressT];
                                             bool canBeStumpable = !isTreeBlock && dx == 0 && dz == 0 && lastLayer_isWood[addressT] && lastLayer_isY[addressT];
 
                                             if (matchedTreeBlock || canBeStumpable)
@@ -1292,7 +1346,7 @@ int main()
                                                 // conditional statements in case we get stumpable block
                                                 thisLayerIDs[addressN] = matchedTreeBlock ? ID : -1;
                                                 thisLayerVarieties[addressN] = matchedTreeBlock ? tr->variety : -1;
-                                                thisLayer_isY[addressN] = (thisLayer_isWood[addressN] = bl->type == wood || bl->type == log) ? treeBlockProperties[bl->prop][AXIS_] == Y_ : false;
+                                                thisLayer_isY[addressN] = (thisLayer_isWood[addressN] = isWoodOrLog(bl->type)) ? getAxis(bl->prop) == Y_ : false;
                                                 visitedMap[addressN] = true;
 
                                                 // if not stumpable, add surrounding to tree
@@ -1320,7 +1374,7 @@ int main()
                     // perform this RECURSIVELY
                     int address = i + xSize * j;
                     auto &bl = thisLayer[address];
-                    if (bl != nullptr && (bl->type == wood || bl->type == log || bl->type == leaves) && !visitedMap[address])
+                    if (bl != nullptr && isAnyTreeBlock(bl->type) && !visitedMap[address])
                         createToTree(visitedMap, level, thisLayer, thisLayerIDs, thisLayerVarieties, thisLayer_isWood, thisLayer_isY, i, j, xSize, zSize, trees);
                 }
             }
@@ -1353,9 +1407,6 @@ int main()
             lastLayer_isY = thisLayer_isY;
 
             start = true;
-
-            // go down one level
-            level--;
         }
 
         // delete IDMAP and Bool maps and thislayer full
@@ -1457,7 +1508,7 @@ int main()
         // merge all trees that need to be merged
         for (int i = 0; i < sz; i++)
         {
-            int parent = dsu[i];
+            int parent = dsuFind(i, dsu);
             if (parent != i)
             {
                 Tree *&other = trees[i];
@@ -1513,7 +1564,7 @@ int main()
             {
                 for (auto bl : p->blocks)
                 {
-                    if (bl.prop == -1) // if a stumpable block exists, there will be a stump
+                    if (stumpableBlocks.count(bl.type)) // if a stumpable block exists, there will be a stump
                     {
                         hasValidStump = true;
                         break;
@@ -1533,7 +1584,7 @@ int main()
                     for (auto i = 0; i < v.size();)
                     {
                         auto &bl = v[i];
-                        if (bl.type == wood)
+                        if (isWoodOrLog(bl.type))
                         {
                             bl = v.back();
                             v.pop_back();
@@ -1586,7 +1637,7 @@ int main()
                 {
                     for (auto &bl : p->blocks)
                     {
-                        if (bl.type == leaves)
+                        if (leafTypes.count(bl.type))
                         {
                             isLeafless = false;
                             break;
@@ -1696,7 +1747,7 @@ int main()
 
                                     auto type = bl->type;
 
-                                    if (type != wood && type != log)
+                                    if (!isWoodOrLog(type))
                                     {
                                         j++;
                                         continue;
@@ -1745,10 +1796,10 @@ int main()
                                     }
 
                                     //  1. ends, 2. starts
-                                    auto thisAxis = treeBlockProperties[bl->prop][AXIS_];
+                                    int thisAxis = getAxis(bl->prop);
 
                                     bool isValid = false;
-                                    int8_t otherAxis;
+                                    int otherAxis;
                                     block *otherBlock;
 
                                     // if wood/log is x or z-oriented
@@ -1759,7 +1810,7 @@ int main()
                                             otherBlock = blockMap[i - 1 + xSize * j];
                                             if (otherBlock != nullptr)
                                             {
-                                                otherAxis = treeBlockProperties[otherBlock->prop][AXIS_];
+                                                otherAxis = getAxis(otherBlock->prop);
                                                 if (otherAxis == Y_ || otherAxis == Z_)
                                                 {
                                                     j++;
@@ -1773,7 +1824,7 @@ int main()
                                             otherBlock = blockMap[i + 1 + xSize * j];
                                             if (otherBlock != nullptr)
                                             {
-                                                otherAxis = treeBlockProperties[otherBlock->prop][AXIS_];
+                                                otherAxis = getAxis(otherBlock->prop);
                                                 if (otherAxis == Y_ || otherAxis == Z_)
                                                 {
                                                     j++;
@@ -1789,7 +1840,7 @@ int main()
                                             otherBlock = blockMap[i + xSize * (j - 1)];
                                             if (otherBlock != nullptr)
                                             {
-                                                otherAxis = treeBlockProperties[otherBlock->prop][AXIS_];
+                                                otherAxis = getAxis(otherBlock->prop);
                                                 if (otherAxis == Y_ || otherAxis == X_)
                                                 {
                                                     j++;
@@ -1803,7 +1854,7 @@ int main()
                                             otherBlock = blockMap[i + xSize * (j + 1)];
                                             if (otherBlock != nullptr)
                                             {
-                                                otherAxis = treeBlockProperties[otherBlock->prop][AXIS_];
+                                                otherAxis = getAxis(otherBlock->prop);
                                                 if (otherAxis == Y_ || otherAxis == X_)
                                                 {
                                                     j++;
@@ -1845,7 +1896,7 @@ int main()
                                                 if (dy == 0)
                                                 {
                                                     otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && treeBlockProperties[otherBlock->prop][AXIS_] == -1)
+                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
                                                     {
                                                         isValid = true;
                                                         j++;
@@ -1856,7 +1907,7 @@ int main()
                                                 else if (dy == -1)
                                                 {
                                                     otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && treeBlockProperties[otherBlock->prop][AXIS_] == -1)
+                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
                                                     {
                                                         isValid = true;
                                                         j++;
@@ -1867,7 +1918,7 @@ int main()
                                                 else if (dy == 1)
                                                 {
                                                     otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && treeBlockProperties[otherBlock->prop][AXIS_] == -1)
+                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
                                                     {
                                                         isValid = true;
                                                         j++;
@@ -1956,7 +2007,7 @@ int main()
                 {
                     auto &bl = blks[i];
                     auto type = bl.type;
-                    if (type != wood && type != leaves && type != log)
+                    if (!isAnyTreeBlock(type))
                     {
 
                         bl = blks.back();
@@ -2244,7 +2295,7 @@ int main()
             // merge all trees that need to be merged
             for (int i = 0; i < sz; i++)
             {
-                int parent = dsu[i];
+                int parent = dsuFind(i, dsu);
                 if (parent != i)
                 {
                     Sub_Tree *&other = sub_trees[i];
@@ -2297,7 +2348,7 @@ int main()
                     {
                         for (auto &bl : p->blocks)
                         {
-                            if (bl.type == leaves)
+                            if (leafTypes.count(bl.type))
                             {
                                 purelyWood = false;
                                 break;
@@ -2343,7 +2394,7 @@ int main()
     // DEBUGGING: check if any empty trees exist
 
     // add subtrees to trees
-    trees.reserve(trees.size() + trees.size());
+    trees.reserve(trees.size() + treesToAdd.size());
     trees.insert(
         trees.end(),
         std::make_move_iterator(treesToAdd.begin()),
@@ -2378,7 +2429,7 @@ void createToTree(bool *&visitedMap, const int zenith, block **&thisLayer, int *
     trees.push_back(tree = new Tree(zenith));
 
     // set tree variety
-    tree->variety = treeBlockProperties[thisLayer[i + xSize * j]->prop][VARIETY_];
+    tree->variety = getVariety(thisLayer[i + xSize * j]->type);
 
     while (blockCalls.empty() == false)
     {
@@ -2393,7 +2444,7 @@ void createToTree(bool *&visitedMap, const int zenith, block **&thisLayer, int *
 
         IDmap[address] = tree->treeID;
         varietyMap[address] = tree->variety;
-        isYMap[address] = (isWoodMap[address] = b->type == wood || b->type == log) && treeBlockProperties[b->prop][AXIS_] == Y_;
+        isYMap[address] = (isWoodMap[address] = isWoodOrLog(b->type)) && getAxis(b->prop) == Y_;
 
         // emulate calling of function for all surrounding blocks in cross-shaped pattern: (diagonals will not be considered)
         for (int dx = -1; dx <= 1; dx++)
@@ -2411,7 +2462,7 @@ void createToTree(bool *&visitedMap, const int zenith, block **&thisLayer, int *
 
                     block *bl = thisLayer[addressN];
 
-                    if (bl != nullptr && !visitedMap[addressN] && (bl->type == wood || bl->type == log || bl->type == leaves) && treeBlockProperties[bl->prop][VARIETY_] == tree->variety)
+                    if (bl != nullptr && !visitedMap[addressN] && isAnyTreeBlock(bl->type) && getVariety(bl->type) == tree->variety)
                     {
                         // push call into stack
                         blockCalls.push({ni, nj});
@@ -2440,7 +2491,7 @@ void createToTree(bool *&visitedMap, const int zenith, block *&thisLayer, int *&
     trees.push_back(tree = new Sub_Tree(zenith));
 
     // set tree variety
-    tree->variety = treeBlockProperties[thisLayer[i + xSize * j].prop][VARIETY_];
+    tree->variety = getVariety(thisLayer[i + xSize * j].type);
 
     while (blockCalls.empty() == false)
     {
@@ -2511,7 +2562,7 @@ void addSurroundingToTree(bool *&visitedMap, Tree *tree, Layer *treeLayer, block
 
                     block *bl = thisLayer[addressN];
 
-                    if (bl != nullptr && !visitedMap[addressN] && (bl->type == wood || bl->type == log || bl->type == leaves) && treeBlockProperties[bl->prop][VARIETY_] == tree->variety)
+                    if (bl != nullptr && !visitedMap[addressN] && isAnyTreeBlock(bl->type) && getVariety(bl->type) == tree->variety)
                     {
                         // push call into stack
                         blockCalls.push({ni, nj});
@@ -2535,7 +2586,7 @@ void addSurroundingToTree(bool *&visitedMap, Tree *tree, Layer *treeLayer, block
 
         IDmap[address] = tree->treeID;
         varietyMap[address] = tree->variety;
-        isYMap[address] = (isWoodMap[address] = b->type == wood || b->type == log) && treeBlockProperties[b->prop][AXIS_] == Y_;
+        isYMap[address] = (isWoodMap[address] = isWoodOrLog(b->type)) && getAxis(b->prop) == Y_;
 
     } while (true);
 }
