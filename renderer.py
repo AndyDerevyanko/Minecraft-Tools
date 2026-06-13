@@ -21,9 +21,9 @@ if not os.path.exists(IDS_PATH):
 
 custom = True if input("Does your world have any custom (modded) blocks? : ").lower() == "y" else False
 
-# read binary header
-with open(IN_PATH, "r") as hdr:
-    grab = lambda: int(hdr.readline().split(":")[1].strip())
+# read binary header (open in binary mode to avoid codec errors from binary block data)
+with open(IN_PATH, "rb") as hdr:
+    grab = lambda: int(hdr.readline().decode('ascii').split(":")[1].strip())
     NS_BYTES      = grab() if custom else 0
     ID_PROP_BYTES = grab()
     X_BYTES       = grab()

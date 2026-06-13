@@ -361,6 +361,13 @@ def process_core(k, core_count, mca_list_length, output_queue, config):
 def main():
     import ctypes
 
+    # clean up any leftover process files from prior crashes
+    for _f in [_n for _n in os.listdir('.') if _n.startswith('process_')]:
+        try:
+            os.remove(_f)
+        except OSError:
+            pass
+
     kernel32 = ctypes.windll.kernel32
     handle = kernel32.GetStdHandle(-10)
     mode = ctypes.c_ulong()
@@ -699,6 +706,7 @@ def main():
             f_name = f"process_{k}"
 
             if os.path.getsize(f_name) == 0:
+                os.remove(f_name)
                 continue
 
             f = open(f_name, "rb")

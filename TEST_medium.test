@@ -1,6 +1,6 @@
 > py -3.13 worldExtract.py  
 C:\projects\Minecraft-Tools\world\TEST_medium_hard
-.\
+dimensions\minecraft\overworld
 320
 -62
 n

@@ -1,0 +1,12 @@
+newmtl leaf
+Kd 0.130 0.550 0.130
+
+newmtl wood
+Kd 0.400 0.260 0.130
+
+newmtl stumpable
+Kd 0.400 0.400 0.400
+
+newmtl other
+Kd 0.720 0.720 0.720
+

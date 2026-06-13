@@ -7,6 +7,25 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ---------------------------------------------------------------------------
+# Tee: write every print() to both console and results file simultaneously
+# ---------------------------------------------------------------------------
+
+class Tee:
+    def __init__(self, file):
+        self._file   = file
+        self._stdout = sys.__stdout__
+    def write(self, data):
+        self._stdout.write(data)
+        self._file.write(data)
+    def flush(self):
+        self._stdout.flush()
+        self._file.flush()
+    # input() needs readline on sys.stdin, not stdout — keep stdin untouched
+    def isatty(self):
+        return self._stdout.isatty()
+
+
+# ---------------------------------------------------------------------------
 # Parse / validate
 # ---------------------------------------------------------------------------
 
@@ -41,7 +60,7 @@ def validate_test(inputs):
         if upper <= lower:
             errors.append(f"upper_lim ({upper}) must be > lower_lim ({lower})")
     except ValueError:
-        errors.append(f"upper/lower limits must be integers")
+        errors.append("upper/lower limits must be integers")
 
     scan_ans = inputs[4].strip().lower()
     if scan_ans not in ('y', 'n'):
@@ -68,20 +87,16 @@ def validate_test(inputs):
 
 
 def test_meta(cmd_str, inputs):
-    """Return (py_prefix, world_base, world_file, obj_file, custom, renderer_cmd)."""
-    # derive python prefix: "py -3.13 worldExtract.py" → "py -3.13"
-    py_prefix = cmd_str.rsplit('worldExtract.py', 1)[0].strip()
-
-    world_base = os.path.basename(inputs[0].strip())
-    world_file = os.path.join(SCRIPT_DIR, f"{world_base}.world")
-    obj_file   = os.path.join(SCRIPT_DIR, f"{world_base}.obj")
-
-    scan_ans   = inputs[4].strip().lower()
-    custom_idx = 9 if scan_ans == 'n' else 5
-    custom     = inputs[custom_idx].strip().lower() == 'y'
-
+    """Return (world_base, world_file, obj_file, custom, renderer_cmd)."""
+    py_prefix    = cmd_str.rsplit('worldExtract.py', 1)[0].strip()
+    world_base   = os.path.basename(inputs[0].strip())
+    world_file   = os.path.join(SCRIPT_DIR, f"{world_base}.world")
+    obj_file     = os.path.join(SCRIPT_DIR, f"{world_base}.obj")
+    scan_ans     = inputs[4].strip().lower()
+    custom_idx   = 9 if scan_ans == 'n' else 5
+    custom       = inputs[custom_idx].strip().lower() == 'y'
     renderer_cmd = f"{py_prefix} renderer.py"
-    return py_prefix, world_base, world_file, obj_file, custom, renderer_cmd
+    return world_base, world_file, obj_file, custom, renderer_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -89,12 +104,14 @@ def test_meta(cmd_str, inputs):
 # ---------------------------------------------------------------------------
 
 def pipe_run(cmd, stdin_lines, cwd):
-    """Run cmd (shell string) with piped stdin. Return (ok, stdout+stderr text)."""
+    """Run cmd with piped stdin. Return (ok, full output text)."""
     data = "\n".join(stdin_lines) + "\n"
     r = subprocess.run(cmd, input=data, capture_output=True, text=True,
                        cwd=cwd, shell=True)
-    combined = r.stdout + ("\n--- stderr ---\n" + r.stderr if r.stderr.strip() else "")
-    return r.returncode == 0, combined
+    out = r.stdout
+    if r.stderr.strip():
+        out += "\n--- stderr ---\n" + r.stderr
+    return r.returncode == 0, out
 
 
 def open_viewer(path):
@@ -106,6 +123,17 @@ def open_viewer(path):
 # ---------------------------------------------------------------------------
 
 def main():
+    out_path = os.path.join(SCRIPT_DIR, "test_results.txt")
+    with open(out_path, "w", encoding="utf-8") as results_file:
+        sys.stdout = Tee(results_file)
+        try:
+            _run()
+        finally:
+            sys.stdout = sys.__stdout__
+    print(f"\nResults saved → {out_path}")
+
+
+def _run():
     test_paths = sorted(glob.glob(os.path.join(SCRIPT_DIR, "*.test")))
     if not test_paths:
         print("No .test files found.")
@@ -151,33 +179,30 @@ def main():
     results = {}
 
     for idx, (name, cmd_str, inputs) in enumerate(valid_tests):
-        _, world_base, world_file, obj_file, custom, renderer_cmd = \
-            test_meta(cmd_str, inputs)
+        _, world_file, obj_file, custom, renderer_cmd = test_meta(cmd_str, inputs)
 
         print("=" * 55)
         print(f"[{idx+1}/{len(valid_tests)}]  {name}")
         print("=" * 55)
 
         # step 1: worldExtract
-        print("  worldExtract.py ...", end="", flush=True)
+        print("  worldExtract.py ...")
         ok, out = pipe_run(cmd_str, inputs, SCRIPT_DIR)
+        print(out)
         if not ok or not os.path.exists(world_file):
-            print(" FAILED")
-            print(out[-600:])
+            print("  ^^^ worldExtract FAILED ^^^")
             results[name] = "ERROR  (worldExtract failed)"
             continue
-        print(" done")
 
         # step 2: renderer
         renderer_inputs = [world_file, "y" if custom else "n"]
-        print("  renderer.py ...   ", end="", flush=True)
+        print("  renderer.py ...")
         ok, out = pipe_run(renderer_cmd, renderer_inputs, SCRIPT_DIR)
+        print(out)
         if not ok or not os.path.exists(obj_file):
-            print(" FAILED")
-            print(out[-600:])
+            print("  ^^^ renderer FAILED ^^^")
             results[name] = "ERROR  (renderer failed)"
             continue
-        print(" done")
 
         # step 3: open viewer
         print(f"  Opening {os.path.basename(obj_file)} ...")
@@ -199,13 +224,6 @@ def main():
         print(f"  {name:<38} {verdict}")
     passes = sum(1 for v in results.values() if v == "PASS")
     print(f"\n  {passes}/{len(results)} passed")
-
-    out_path = os.path.join(SCRIPT_DIR, "test_results.txt")
-    with open(out_path, "w") as f:
-        for name, verdict in results.items():
-            f.write(f"{name:<38} {verdict}\n")
-        f.write(f"\n{passes}/{len(results)} passed\n")
-    print(f"\n  Results saved → {out_path}")
 
 
 if __name__ == "__main__":
