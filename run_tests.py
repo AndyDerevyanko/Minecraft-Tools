@@ -4,7 +4,7 @@ import glob
 import subprocess
 
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-TREE_REMOVER  = os.path.join(SCRIPT_DIR, "c++", "treeRemover.exe")
+TREE_REMOVER  = os.path.join(SCRIPT_DIR, "c++", "build", "Debug", "outDebug.exe")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,11 @@ def main():
 
 
 def _run():
-    test_paths = sorted(glob.glob(os.path.join(SCRIPT_DIR, "*.test")))
+    def _test_sort_key(p):
+        name = os.path.basename(p).lower()
+        # extreme runs first; everything else sorts alphabetically after it
+        return (0 if "extreme" in name else 1, name)
+    test_paths = sorted(glob.glob(os.path.join(SCRIPT_DIR, "*.test")), key=_test_sort_key)
     if not test_paths:
         print("No .test files found.")
         return
@@ -209,21 +213,7 @@ def _run():
             results[name] = "ERROR  (worldExtract failed)"
             continue
 
-        # ── step 2: renderer on raw world ────────────────────
-        renderer_inputs = [meta["world_file"], "y" if meta["custom"] else "n"]
-        print("  renderer.py  (raw world) ...")
-        ok, out = pipe_run(meta["renderer_cmd"], renderer_inputs, SCRIPT_DIR)
-        print(out)
-        if not ok or not os.path.exists(meta["obj_file"]):
-            print("  ^^^ renderer (raw) FAILED ^^^")
-            results[name] = "ERROR  (renderer/raw failed)"
-            continue
-
-        # ── step 3: open raw OBJ (reference view) ────────────
-        print(f"  Opening raw render: {os.path.basename(meta['obj_file'])} ...")
-        open_viewer(meta["obj_file"])
-
-        # ── step 4: treeRemover ───────────────────────────────
+        # ── step 2: treeRemover ───────────────────────────────
         if tree_remover_available:
             tr_inputs = [
                 meta["world_file"],
@@ -238,7 +228,7 @@ def _run():
                 results[name] = "ERROR  (treeRemover failed)"
                 continue
 
-            # ── step 5: renderer on trees world ──────────────
+            # ── step 3: renderer on trees world ──────────────
             trees_renderer_inputs = [meta["trees_world_file"], "y" if meta["custom"] else "n"]
             print("  renderer.py  (trees) ...")
             ok, out = pipe_run(meta["renderer_cmd"], trees_renderer_inputs, SCRIPT_DIR)
@@ -248,13 +238,13 @@ def _run():
                 results[name] = "ERROR  (renderer/trees failed)"
                 continue
 
-            # ── step 6: open trees OBJ ───────────────────────
+            # ── step 4: open trees OBJ ───────────────────────
             print(f"  Opening tree render: {os.path.basename(meta['trees_obj_file'])} ...")
             open_viewer(meta["trees_obj_file"])
         else:
             print("  (treeRemover skipped — exe not found)")
 
-        # ── step 7: human verdict ─────────────────────────────
+        # ── step 5: human verdict ─────────────────────────────
         while True:
             ans = input(f"\n  Pass? (y/n): ").strip().lower()
             if ans in ('y', 'n'):

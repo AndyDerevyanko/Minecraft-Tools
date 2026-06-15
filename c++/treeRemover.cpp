@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <array>
 #include <stack>
+#include <zlib.h>
 
 #define TREE_TYPE_COUNT 11
 
@@ -740,83 +741,6 @@ int getArrIndex_Tree(std::string arr[], int size, std::string target)
     return -1; // not found
 }
 
-std::array<int, 3> tree_varietyTag_OrientationTag(const std::string &line)
-{
-    int varietyTag = -1;
-    int orientationTag = -1;
-    int ID = 0;
-
-    // find variety
-    size_t pos = line.find("\'material\':");
-
-    if (pos != std::string::npos)
-    {
-        std::string subLine = line.substr(pos);
-
-        // find "stringTag" of variety
-        pos = subLine.find("StringTag(\""); // put pos to start of variety name
-
-        if (pos != std::string::npos)
-        {
-            pos += 11; // put pos to start at orientation
-            subLine = subLine.substr(pos);
-
-            // set lpos to last exclusive index of variety
-            size_t lpos = subLine.find("\"");
-            varietyTag = getArrIndex_Tree(treeVarietyIDs, TREE_TYPE_COUNT, subLine.substr(0, lpos));
-
-            if (varietyTag != -1)
-            {
-                pos = line.find("\'axis\':");
-
-                if (pos != std::string::npos)
-                {
-                    subLine = line.substr(pos);
-
-                    // find "stringTag" of orientation
-                    pos = subLine.find("StringTag(\"");
-
-                    if (pos != std::string::npos)
-                    {
-                        pos += 11; // put pos to start at orientation
-                        subLine = subLine.substr(pos);
-
-                        // set lpos to last exclusive index of orientation
-                        lpos = subLine.find("\"");
-                        orientationTag = getArrIndex_Tree(treeOrientationIDs, TREE_ORIENTATION_COUNT, subLine.substr(0, lpos));
-                    }
-                    else
-                        orientationTag = -1;
-                }
-                else
-                    orientationTag = -1;
-            }
-            else
-                return {-1, -1, -1};
-        }
-        else
-            return {-1, -1, -1};
-    }
-    else
-        return {-1, -1, -1};
-
-    pos = line.rfind("}=");
-
-    if (pos != std::string::npos)
-    {
-        pos += 2; // put pos to start at index
-
-        for (; pos < line.length(); pos++)
-            ID = ID * 10 + (line[pos] - '0');
-
-        return {varietyTag, orientationTag, ID};
-    }
-    else
-        std::cerr << "Error in block ID file when accessing thru tree_varietyTag_OrientationTag function" << std::endl;
-
-    return {-1, -1, -1};
-}
-
 // tree creation (two overloads)
 void createToTree(
     bool *&visitedMap,
@@ -1027,16 +951,26 @@ int main()
     std::cout << "Please enter world block Properties list + extension (ex. myworldblockproperties.txt): ";
     std::cin >> worldBlockProperties;
 
-    // open all world files (world in binary because it has a text header then raw bytes)
-    std::ifstream world(worldName, std::ios::binary);
+    // open all world files (world in binary gzip because it has a text header then raw bytes)
+    gzFile gz = gzopen(worldName.c_str(), "rb");
     std::ifstream blockIDs(worldBlockIDs);
     std::ifstream blockProperties(worldBlockProperties);
 
-    if (world.fail() || blockIDs.fail() || blockProperties.fail())
+    if (!gz || blockIDs.fail() || blockProperties.fail())
     {
         std::cerr << "Failed to open one or more files.\n";
+        if (gz) gzclose(gz);
         return 1;
     }
+
+    // helper: read one newline-terminated line from gz stream
+    auto gzGetLine = [](gzFile f) -> std::string {
+        std::string s;
+        int c;
+        while ((c = gzgetc(f)) != -1 && c != '\n')
+            s += (char)c;
+        return s;
+    };
 
     // variable to hold read file lines
     std::string line;
@@ -1126,7 +1060,12 @@ int main()
             blockName == "podzol" || blockName == "rooted_dirt" || blockName == "moss_block" ||
             blockName == "pale_moss_block" || blockName == "mud" || blockName == "muddy_mangrove_roots" ||
             blockName == "mycelium" || blockName == "farmland" || blockName == "clay" ||
-            blockName == "crimson_nylium" || blockName == "warped_nylium")
+            blockName == "crimson_nylium" || blockName == "warped_nylium" ||
+            blockName == "gravel" ||
+            blockName == "sand" || blockName == "red_sand" ||
+            blockName == "dirt_path" || blockName == "grass_path" ||
+            blockName == "soul_sand" ||
+            blockName == "snow_block")
         {
             stumpableBlocks.insert(numericID);
         }
@@ -1142,22 +1081,21 @@ int main()
         return val;
     };
 
-    std::string hLine;
-    std::getline(world, hLine);
+    std::string hLine = gzGetLine(gz);
     bool customWorld = (hLine.find("namespace") != std::string::npos);
 
     int NS_BYTES = 0, ID_PROP_BYTES, X_BYTES, Y_BYTES, Z_BYTES;
     if (customWorld) {
         NS_BYTES = parseHeaderLine(hLine);
-        std::getline(world, hLine); ID_PROP_BYTES = parseHeaderLine(hLine);
+        hLine = gzGetLine(gz); ID_PROP_BYTES = parseHeaderLine(hLine);
     } else {
         ID_PROP_BYTES = parseHeaderLine(hLine);
     }
-    { std::string tmp; std::getline(world, tmp); X_BYTES = parseHeaderLine(tmp); }
-    { std::string tmp; std::getline(world, tmp); Y_BYTES = parseHeaderLine(tmp); }
-    { std::string tmp; std::getline(world, tmp); Z_BYTES = parseHeaderLine(tmp); }
+    { std::string tmp = gzGetLine(gz); X_BYTES = parseHeaderLine(tmp); }
+    { std::string tmp = gzGetLine(gz); Y_BYTES = parseHeaderLine(tmp); }
+    { std::string tmp = gzGetLine(gz); Z_BYTES = parseHeaderLine(tmp); }
 
-    std::streampos binaryStart = world.tellg();
+    z_off_t binaryStart = gztell(gz);
     int BLOCK_SIZE = (customWorld ? NS_BYTES : 0) + 2 * ID_PROP_BYTES + X_BYTES + Y_BYTES + Z_BYTES;
     int coordsOff  = (customWorld ? NS_BYTES : 0) + 2 * ID_PROP_BYTES;
 
@@ -1168,7 +1106,7 @@ int main()
 
     {
         std::vector<uint8_t> buf(BLOCK_SIZE);
-        while (world.read(reinterpret_cast<char *>(buf.data()), BLOCK_SIZE))
+        while (gzread(gz, buf.data(), BLOCK_SIZE) == BLOCK_SIZE)
         {
             int off = coordsOff;
             int x = decodeCoord(readLE(buf.data() + off, X_BYTES), X_BYTES); off += X_BYTES;
@@ -1197,14 +1135,13 @@ int main()
     }
 
     // second pass: load all relevant blocks grouped by Y level
-    world.clear();
-    world.seekg(binaryStart);
+    gzseek(gz, binaryStart, SEEK_SET);
 
     std::unordered_map<int, std::vector<block>> blocksByY;
     {
         std::vector<uint8_t> buf(BLOCK_SIZE);
         int typeOff = customWorld ? NS_BYTES : 0;
-        while (world.read(reinterpret_cast<char *>(buf.data()), BLOCK_SIZE))
+        while (gzread(gz, buf.data(), BLOCK_SIZE) == BLOCK_SIZE)
         {
             block b;
             b.type = (int)readLE(buf.data() + typeOff,                   ID_PROP_BYTES);
@@ -1318,7 +1255,11 @@ int main()
                                             // possible conditions for these blocks to be added to the tree of PREVIOUS layer:
                                             //  1. we are registering a tree block and its type aligns,
                                             //  OR 2. we are registering a stumpable block that is DIRECTLY below a log that is of orientation y.
-                                            bool matchedTreeBlock = isTreeBlock && getVariety(bl->type) == lastLayerVarieties[addressT];
+                                            // Only propagate downward from y-oriented logs or leaves.
+                                            // Horizontal logs must NOT cascade their tree ID down to pillars below them;
+                                            // that is how building roof beams absorb vertical pillars via section A.
+                                            bool prevLayerPropagates = !lastLayer_isWood[addressT] || lastLayer_isY[addressT];
+                                            bool matchedTreeBlock = isTreeBlock && getVariety(bl->type) == lastLayerVarieties[addressT] && prevLayerPropagates;
                                             bool canBeStumpable = !isTreeBlock && dx == 0 && dz == 0 && lastLayer_isWood[addressT] && lastLayer_isY[addressT];
 
                                             if (matchedTreeBlock || canBeStumpable)
@@ -1419,6 +1360,7 @@ int main()
     }
 
     std::cout << "Finished scanning world for trees" << std::endl;
+    std::cout << "DEBUG trees after scan: " << trees.size() << std::endl;
     std::cout << "Doing merge check: " << std::endl;
 
     { // 1D array of pointers but index using 2D logic:
@@ -1468,7 +1410,8 @@ int main()
 
                 if (t_ps != nullptr)
                     for (auto &bl : t_ps->blocks)
-                        IDMap_curr[bl.x - xMin + xSize * (bl.z - zMin)] = tree->treeID;
+                        if (isAnyTreeBlock(bl.type))
+                            IDMap_curr[bl.x - xMin + xSize * (bl.z - zMin)] = tree->treeID;
             }
 
             for (int i = 0; i < xSize; i++)
@@ -1542,6 +1485,7 @@ int main()
     }
 
     std::cout << "Finished merge check" << std::endl;
+    std::cout << "DEBUG trees after DSU merge: " << trees.size() << std::endl;
     std::cout << "Filtering out invalid foilage and potential mismatches: " << std::endl;
 
     // to store leaves without stumps
@@ -1573,57 +1517,61 @@ int main()
                 p = p->next;
             }
 
-            // if no valid stumps, remove any wood from the tree
+            // The stump layer (lowest Y containing any log/wood block) must have at least
+            // one y-oriented log OR any wood block. A cluster whose lowest layer is
+            // horizontal-logs-only is a building beam, not a tree stump.
+            if (hasValidStump)
+            {
+                int lowestLogY = INT_MAX;
+                for (Layer *lp = tree->head; lp != nullptr; lp = lp->next)
+                    for (const auto &lb : lp->blocks)
+                        if (isWoodOrLog(lb.type) && lb.y < lowestLogY)
+                            lowestLogY = lb.y;
+
+                bool stumpLayerValid = false;
+                if (lowestLogY != INT_MAX)
+                {
+                    for (Layer *lp = tree->head; lp != nullptr && !stumpLayerValid; lp = lp->next)
+                        for (const auto &lb : lp->blocks)
+                            if (lb.y == lowestLogY && isWoodOrLog(lb.type))
+                                if (woodTypes.count(lb.type) || getAxis(lb.prop) == Y_)
+                                    stumpLayerValid = true;
+                }
+
+                if (!stumpLayerValid)
+                    hasValidStump = false;
+            }
+
+            // if no valid stumps, keep logs intact so the foilage-attachment pass
+            // can promote this object (with its trunk) when its base is adjacent to
+            // a confirmed tree (e.g. when Tree B's stump was swept into Tree A).
+            // Only discard if there are no leaves at all (log-only orphans have no use).
             if (!hasValidStump)
             {
+                bool hasLeaf = false;
                 p = tree->head;
-
-                while (p != nullptr)
+                while (p != nullptr && !hasLeaf)
                 {
-                    auto &v = p->blocks;
-                    for (auto i = 0; i < v.size();)
-                    {
-                        auto &bl = v[i];
-                        if (isWoodOrLog(bl.type))
-                        {
-                            bl = v.back();
-                            v.pop_back();
-                        }
-                        else
-                            i++;
-                    }
-
+                    for (const auto &bl : p->blocks)
+                        if (leafTypes.count(bl.type)) { hasLeaf = true; break; }
                     p = p->next;
                 }
 
-                // remove empty trees (maybe the tree had no leaves AND no valid stump)
-                bool isEmpty = true;
-                p = tree->head;
-
-                while (p != nullptr)
+                if (!hasLeaf)
                 {
-                    if (!p->blocks.empty())
-                    {
-                        isEmpty = false;
-                        break;
-                    }
-                    p = p->next;
-                }
-
-                if (isEmpty)
-                {
-                    // remove empty tree
+                    // no leaves and no stump — discard entirely
                     trees[treeIdx] = trees.back();
                     trees.pop_back();
-                    continue; // no stumpable blocks to delete, we're done here
+                    continue;
                 }
                 else
                 {
-                    // move to "foilage" vector: its just leaves
+                    // move to foilage WITH logs; foilage-attachment can promote the
+                    // full segment to confirmed if its base touches a confirmed block.
                     foilage.push_back(trees[treeIdx]);
                     trees[treeIdx] = trees.back();
                     trees.pop_back();
-                    continue; // no stumpable blocks to delete, we're done here
+                    continue;
                 }
             }
             else
@@ -1655,6 +1603,67 @@ int main()
                 }
                 else
                 {
+                    // Remove horizontal log clusters not reachable from any y-oriented log
+                    // via log-only adjacency. Prevents building beams (absorbed only through
+                    // leaf contact) from remaining in the detected tree.
+                    {
+                        auto logPack = [](int x, int y, int z) -> int64_t {
+                            return ((int64_t)(x + (1 << 25)) & 0x3FFFFFF)
+                                 | (((int64_t)(z + (1 << 25)) & 0x3FFFFFF) << 26)
+                                 | (((int64_t)(y + 64) & 0xFFF) << 52);
+                        };
+
+                        // pos → axis: Y_ for wood/unknown (unrestricted), X_/Z_ for horizontal logs
+                        std::unordered_set<int64_t> allLogs;
+                        std::unordered_map<int64_t, int> logAxis;
+                        for (Layer *lp = tree->head; lp != nullptr; lp = lp->next)
+                            for (const auto &lb : lp->blocks)
+                                if (isWoodOrLog(lb.type)) {
+                                    int64_t k = logPack(lb.x, lb.y, lb.z);
+                                    allLogs.insert(k);
+                                    int ax = woodTypes.count(lb.type) ? Y_ : getAxis(lb.prop);
+                                    logAxis[k] = (ax == -1) ? Y_ : ax;
+                                }
+
+                        std::unordered_set<int64_t> reachLogs;
+                        std::stack<std::array<int,3>> stk;
+                        for (Layer *lp = tree->head; lp != nullptr; lp = lp->next)
+                            for (const auto &lb : lp->blocks)
+                                if (isWoodOrLog(lb.type) && (woodTypes.count(lb.type) || getAxis(lb.prop) == Y_)) {
+                                    int64_t k = logPack(lb.x, lb.y, lb.z);
+                                    if (reachLogs.insert(k).second)
+                                        stk.push({lb.x, lb.y, lb.z});
+                                }
+
+                        // Horizontal logs (axis X or Z) may only expand left/right/forward/back —
+                        // never up or down. This stops building columns (stacked X/Z logs) from
+                        // staying connected through a single trunk-adjacent log.
+                        const int dirs6[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+                        while (!stk.empty()) {
+                            std::array<int,3> cur = stk.top(); stk.pop();
+                            int64_t curKey = logPack(cur[0], cur[1], cur[2]);
+                            bool hLog = (logAxis[curKey] != Y_);
+                            for (const auto &d : dirs6) {
+                                if (hLog && d[1] != 0) continue; // skip Y neighbours for horizontal logs
+                                int nx = cur[0]+d[0], ny = cur[1]+d[1], nz = cur[2]+d[2];
+                                int64_t nk = logPack(nx, ny, nz);
+                                if (allLogs.count(nk) && reachLogs.insert(nk).second)
+                                    stk.push({nx, ny, nz});
+                            }
+                        }
+
+                        for (Layer *lp = tree->head; lp != nullptr; lp = lp->next) {
+                            auto &blks = lp->blocks;
+                            for (size_t bi = 0; bi < blks.size(); ) {
+                                if (isWoodOrLog(blks[bi].type) &&
+                                    !reachLogs.count(logPack(blks[bi].x, blks[bi].y, blks[bi].z)))
+                                    { blks[bi] = blks.back(); blks.pop_back(); }
+                                else
+                                    ++bi;
+                            }
+                        }
+                    }
+
                     // now we start complex logic to remove potential house-pieces
                     // 1. all L paterns or | patterns of y_ blocks and all above them will be removed, as these are unnatural shapes
                     // 2. All z_ or x_ axis blocks must touch log of y_ or opposite variety on corresponding axis OR
@@ -2024,6 +2033,7 @@ int main()
     }
 
     std::cout << "Finished filtering out invalid foilage and potential mismatches" << std::endl;
+    std::cout << "DEBUG trees after filter: " << trees.size() << "  foilage: " << foilage.size() << std::endl;
     std::cout << "Getting rid of orphan blocks: " << std::endl;
 
     std::vector<Tree *> treesToAdd;
@@ -2255,7 +2265,8 @@ int main()
 
                     if (t_ps != nullptr)
                         for (auto &bl : t_ps->blocks)
-                            IDMap_curr[bl.x - xMin + xSize * (bl.z - zMin)] = sub_tree->sub_treeID;
+                            if (isAnyTreeBlock(bl.type))
+                                IDMap_curr[bl.x - xMin + xSize * (bl.z - zMin)] = sub_tree->sub_treeID;
                 }
 
                 for (int i = 0; i < xSize; i++)
@@ -2413,59 +2424,160 @@ int main()
             outStem = outStem.substr(0, dot);
     }
 
-    // write binary _trees.world in the same format as worldExtract output
-    {
-        std::ofstream outWorld(outStem + "_trees.world", std::ios::binary);
-        if (customWorld)
-            outWorld << "namespace bytes: " << NS_BYTES << "\n";
-        outWorld << "id/prop bytes: " << ID_PROP_BYTES << "\n";
-        outWorld << "x coord bytes: " << X_BYTES << "\n";
-        outWorld << "y coord bytes: " << Y_BYTES << "\n";
-        outWorld << "z coord bytes: " << Z_BYTES << "\n";
+    auto packXYZ = [](int x, int y, int z) -> int64_t {
+        return ((int64_t)(x & 0x3FFFFFF))
+             | ((int64_t)(z & 0x3FFFFFF) << 26)
+             | ((int64_t)(y & 0xFFF)     << 52);
+    };
 
-        auto wLE = [](std::ofstream &f, uint64_t val, int n) {
-            for (int i = 0; i < n; i++)
-                f.put((char)((val >> (8 * i)) & 0xFF));
+    // ── Iteratively attach orphan foliage to adjacent confirmed trees ─────
+    // Handles custom trees whose leaf variety doesn't match their trunk type.
+    {
+        std::unordered_set<int64_t> confirmedSet;
+        for (auto tree : trees) {
+            Layer *p = tree->head;
+            while (p != nullptr) {
+                for (const auto &bl : p->blocks)
+                    confirmedSet.insert(packXYZ(bl.x, bl.y, bl.z));
+                p = p->next;
+            }
+        }
+
+        bool any_merged = true;
+        while (any_merged) {
+            any_merged = false;
+            for (size_t fi = 0; fi < foilage.size();) {
+                Object *obj = foilage[fi];
+                bool attached = false;
+                for (Layer *p = obj->head; p != nullptr && !attached; p = p->next) {
+                    for (const auto &bl : p->blocks) {
+                        for (int dx = -1; dx <= 1 && !attached; dx++)
+                            for (int dy = -1; dy <= 1 && !attached; dy++)
+                                for (int dz = -1; dz <= 1 && !attached; dz++) {
+                                    if (dx == 0 && dy == 0 && dz == 0) continue;
+                                    if (confirmedSet.count(packXYZ(bl.x+dx, bl.y+dy, bl.z+dz)))
+                                        attached = true;
+                                }
+                        if (attached) break;
+                    }
+                }
+                if (attached) {
+                    for (Layer *p = foilage[fi]->head; p != nullptr; p = p->next)
+                        for (const auto &bl : p->blocks)
+                            confirmedSet.insert(packXYZ(bl.x, bl.y, bl.z));
+                    trees.push_back(static_cast<Tree*>(foilage[fi]));
+                    foilage[fi] = foilage.back();
+                    foilage.pop_back();
+                    any_merged = true;
+                } else {
+                    fi++;
+                }
+            }
+        }
+    }
+
+    // ── build sets of (x,y,z) belonging to confirmed trees and foliage ───
+    std::unordered_set<int64_t> treeCoords, foliageCoords;
+    for (auto tree : trees) {
+        Layer *p = tree->head;
+        while (p != nullptr) {
+            for (const auto &bl : p->blocks) treeCoords.insert(packXYZ(bl.x, bl.y, bl.z));
+            p = p->next;
+        }
+    }
+    for (auto obj : foilage) {
+        Layer *p = obj->head;
+        while (p != nullptr) {
+            for (const auto &bl : p->blocks) foliageCoords.insert(packXYZ(bl.x, bl.y, bl.z));
+            p = p->next;
+        }
+    }
+
+    // ── find max existing block ID, assign marker IDs ─────────────────────
+    int maxBlockID = 0;
+    {
+        blockIDs.clear();
+        blockIDs.seekg(0);
+        std::string bline;
+        while (std::getline(blockIDs, bline)) {
+            size_t pos = bline.find('=');
+            if (pos == std::string::npos) continue;
+            int id = 0;
+            for (size_t k = 0; k < pos; k++) id = id * 10 + (bline[k] - '0');
+            if (id > maxBlockID) maxBlockID = id;
+        }
+    }
+    int treeMarkerID    = maxBlockID + 1;
+    int foliageMarkerID = maxBlockID + 2;
+
+    // bump byte width if new IDs no longer fit
+    int outIDBytes = ID_PROP_BYTES;
+    while (foliageMarkerID >= (1 << (outIDBytes * 8))) outIDBytes++;
+
+    // ── write full world with marker substitution ─────────────────────────
+    {
+        auto wLE = [](gzFile f, uint64_t val, int n) {
+            uint8_t buf[8];
+            for (int i = 0; i < n; i++) buf[i] = (uint8_t)((val >> (8 * i)) & 0xFF);
+            gzwrite(f, buf, (unsigned)n);
         };
         auto enc = [](int val, int n) -> uint64_t {
             return val < 0 ? ((uint64_t)(-val) | (1ULL << (n * 8 - 1))) : (uint64_t)val;
         };
-        auto writeBlock = [&](const block &bl) {
-            if (customWorld) wLE(outWorld, 0, NS_BYTES);
-            wLE(outWorld, (uint64_t)bl.type, ID_PROP_BYTES);
-            wLE(outWorld, (uint64_t)(bl.prop < 0 ? 0 : bl.prop), ID_PROP_BYTES);
-            wLE(outWorld, enc(bl.x, X_BYTES), X_BYTES);
-            wLE(outWorld, enc(bl.y, Y_BYTES), Y_BYTES);
-            wLE(outWorld, enc(bl.z, Z_BYTES), Z_BYTES);
-        };
 
-        for (auto tree : trees) {
-            Layer *p = tree->head;
-            while (p != nullptr) {
-                for (const auto &bl : p->blocks) writeBlock(bl);
-                p = p->next;
-            }
+        gzFile outGz = gzopen((outStem + "_trees.world").c_str(), "wb");
+        if (customWorld) gzputs(outGz, ("namespace bytes: " + std::to_string(NS_BYTES) + "\n").c_str());
+        gzputs(outGz, ("id/prop bytes: " + std::to_string(outIDBytes) + "\n").c_str());
+        gzputs(outGz, ("x coord bytes: " + std::to_string(X_BYTES)    + "\n").c_str());
+        gzputs(outGz, ("y coord bytes: " + std::to_string(Y_BYTES)    + "\n").c_str());
+        gzputs(outGz, ("z coord bytes: " + std::to_string(Z_BYTES)    + "\n").c_str());
+
+        int inTypeOff   = customWorld ? NS_BYTES : 0;
+        int inPropOff   = inTypeOff + ID_PROP_BYTES;
+        int inCoordsOff = inPropOff + ID_PROP_BYTES;
+        int inBlockSize = inCoordsOff + X_BYTES + Y_BYTES + Z_BYTES;
+
+        gzseek(gz, binaryStart, SEEK_SET);
+        std::vector<uint8_t> buf(inBlockSize);
+
+        while (gzread(gz, buf.data(), inBlockSize) == inBlockSize) {
+            int bx = decodeCoord(readLE(buf.data() + inCoordsOff,                      X_BYTES), X_BYTES);
+            int by = decodeCoord(readLE(buf.data() + inCoordsOff + X_BYTES,             Y_BYTES), Y_BYTES);
+            int bz = decodeCoord(readLE(buf.data() + inCoordsOff + X_BYTES + Y_BYTES,  Z_BYTES), Z_BYTES);
+
+            int64_t key = packXYZ(bx, by, bz);
+            int outType;
+            if      (treeCoords.count(key))    outType = treeMarkerID;
+            else if (foliageCoords.count(key)) outType = foliageMarkerID;
+            else                               outType = (int)readLE(buf.data() + inTypeOff, ID_PROP_BYTES);
+
+            int propID = (int)readLE(buf.data() + inPropOff, ID_PROP_BYTES);
+
+            if (customWorld) wLE(outGz, readLE(buf.data(), NS_BYTES), NS_BYTES);
+            wLE(outGz, (uint64_t)outType, outIDBytes);
+            wLE(outGz, (uint64_t)propID,  outIDBytes);
+            wLE(outGz, enc(bx, X_BYTES), X_BYTES);
+            wLE(outGz, enc(by, Y_BYTES), Y_BYTES);
+            wLE(outGz, enc(bz, Z_BYTES), Z_BYTES);
         }
-        for (auto obj : foilage) {
-            Layer *p = obj->head;
-            while (p != nullptr) {
-                for (const auto &bl : p->blocks) writeBlock(bl);
-                p = p->next;
-            }
-        }
+        gzclose(outGz);
     }
 
-    // copy blockIds so renderer can find {outStem}_trees.blockIds
+    // ── write blockIds with two new marker entries appended ───────────────
     {
-        std::ifstream src(worldBlockIDs, std::ios::binary);
+        blockIDs.clear();
+        blockIDs.seekg(0);
         std::ofstream dst(outStem + "_trees.blockIds");
-        dst << src.rdbuf();
+        dst << blockIDs.rdbuf();
+        dst << treeMarkerID    << "=tree_marker\n";
+        dst << foliageMarkerID << "=foliage_marker\n";
     }
 
+    std::cout << "DEBUG treeCoords: " << treeCoords.size() << "  foliageCoords: " << foliageCoords.size() << std::endl;
     std::cout << "Tree data written to " << outStem << "_trees.world" << std::endl;
 
     // close all world files
-    world.close();
+    gzclose(gz);
     blockIDs.close();
     blockProperties.close();
 }
@@ -2505,6 +2617,10 @@ void createToTree(bool *&visitedMap, const int zenith, block **&thisLayer, int *
         varietyMap[address] = tree->variety;
         isYMap[address] = (isWoodMap[address] = isWoodOrLog(b->type)) && getAxis(b->prop) == Y_;
 
+        // Leaves must not pull in adjacent horizontal logs — that is the mechanism
+        // by which building roof beams get swept into a tree during the same-Y BFS.
+        bool currentIsLeaf = !isWoodMap[address];
+
         // emulate calling of function for all surrounding blocks in cross-shaped pattern: (diagonals will not be considered)
         for (int dx = -1; dx <= 1; dx++)
         {
@@ -2523,6 +2639,8 @@ void createToTree(bool *&visitedMap, const int zenith, block **&thisLayer, int *
 
                     if (bl != nullptr && !visitedMap[addressN] && isAnyTreeBlock(bl->type) && getVariety(bl->type) == tree->variety)
                     {
+                        if (currentIsLeaf && isWoodOrLog(bl->type) && getAxis(bl->prop) != Y_)
+                            continue; // leaf cannot absorb horizontal logs
                         // push call into stack
                         blockCalls.push({ni, nj});
                         visitedMap[addressN] = true;
@@ -2605,6 +2723,8 @@ void addSurroundingToTree(bool *&visitedMap, Tree *tree, Layer *treeLayer, block
 
     do
     {
+        bool currentIsLeaf = !isWoodMap[coords[0] + xSize * coords[1]];
+
         // emulate calling of function for all surrounding blocks in cross-shaped pattern: (diagonals will not be considered)
         for (int dx = -1; dx <= 1; dx++)
         {
@@ -2623,6 +2743,8 @@ void addSurroundingToTree(bool *&visitedMap, Tree *tree, Layer *treeLayer, block
 
                     if (bl != nullptr && !visitedMap[addressN] && isAnyTreeBlock(bl->type) && getVariety(bl->type) == tree->variety)
                     {
+                        if (currentIsLeaf && isWoodOrLog(bl->type) && getAxis(bl->prop) != Y_)
+                            continue; // leaf cannot absorb horizontal logs
                         // push call into stack
                         blockCalls.push({ni, nj});
                         visitedMap[addressN] = true;
@@ -3374,6 +3496,7 @@ bool isBackwardsUpsideDownL(block *const *map, block *const *nextMap, int i, int
 
 void push_back_uprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int i, int j, int xSize, int zSize, int xMin, int zMin, int box_x, int box_z, int d_x, int d_z)
 {
+    (void)xMin; (void)zMin;
     // DRAWING BEGINS HERE --------------------------------
 
     for (int bx = 0; bx < box_x; bx++) // draw vertical seg
@@ -3388,7 +3511,7 @@ void push_back_uprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int 
                 {
                     if (bx != 0 && dz != 0 && bx != box_x - 1)
                     { // depends on L orientation (here we have normal L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3409,7 +3532,7 @@ void push_back_uprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int 
                 {
                     if (bx != 0 && bz != box_z - 1 && (bx != box_x - 1 || bz != 0) && (d_x != 0 || bx != box_x - 1) && (d_z != 0 || bz != 0))
                     { // depends on L orientation (here we have normal L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3429,7 +3552,7 @@ void push_back_uprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int 
                 {
                     if (dx != d_x - 1 && bz != box_z - 1 && bz != 0)
                     { // depends on L orientation (here we have normal L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3441,7 +3564,7 @@ void push_back_uprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int 
 
 void push_back_backwardsUprightL(std::vector<std::pair<int, int>> &toVerticalDelete, int i, int j, int xSize, int zSize, int xMin, int zMin, int box_x, int box_z, int d_x, int d_z)
 {
-
+    (void)xMin; (void)zMin;
     // DRAWING BEGINS HERE --------------------------------
     for (int bx = 0; bx < box_x; bx++) // draw vertical seg
         for (int dz = 0; dz < d_z; dz++)
@@ -3455,7 +3578,7 @@ void push_back_backwardsUprightL(std::vector<std::pair<int, int>> &toVerticalDel
                 {
                     if (bx != 0 && dz != 0 && bx != box_x - 1)
                     { // depends on L orientation (same as upright L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3476,7 +3599,7 @@ void push_back_backwardsUprightL(std::vector<std::pair<int, int>> &toVerticalDel
                 {
                     if (bx != box_x - 1 && bz != box_z - 1 && (bx != 0 || bz != 0) && (d_x != 0 || bx != 0) && (d_z != 0 || bz != 0))
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3496,7 +3619,7 @@ void push_back_backwardsUprightL(std::vector<std::pair<int, int>> &toVerticalDel
                 {
                     if (dx != 0 && bz != box_z - 1 && bz != 0)
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3509,6 +3632,7 @@ void push_back_backwardsUprightL(std::vector<std::pair<int, int>> &toVerticalDel
 
 void push_back_upsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, int i, int j, int xSize, int zSize, int xMin, int zMin, int box_x, int box_z, int d_x, int d_z)
 {
+    (void)xMin; (void)zMin;
     // DRAWING BEGINS HERE --------------------------------
 
     for (int bx = 0; bx < box_x; bx++) // draw vertical seg
@@ -3523,7 +3647,7 @@ void push_back_upsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, i
                 {
                     if (bx != 0 && dz != d_z - 1 && bx != box_x - 1)
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3544,7 +3668,7 @@ void push_back_upsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, i
                 {
                     if (bx != box_x - 1 && bz != 0 && (bx != 0 || bz != box_z - 1) && (d_x != 0 || bx != 0) && (d_z != 0 || bz != box_z - 1))
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3564,7 +3688,7 @@ void push_back_upsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, i
                 {
                     if (dx != 0 && bz != box_z - 1 && bz != 0)
                     { // depends on L orientation (same as backwards L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3577,6 +3701,7 @@ void push_back_upsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, i
 
 void push_back_backwardsUpsideDownL(std::vector<std::pair<int, int>> &toVerticalDelete, int i, int j, int xSize, int zSize, int xMin, int zMin, int box_x, int box_z, int d_x, int d_z)
 {
+    (void)xMin; (void)zMin;
     // DRAWING BEGINS HERE --------------------------------
 
     for (int bx = 0; bx < box_x; bx++) // draw vertical seg
@@ -3591,7 +3716,7 @@ void push_back_backwardsUpsideDownL(std::vector<std::pair<int, int>> &toVertical
                 {
                     if (bx != 0 && dz != d_z - 1 && bx != box_x - 1)
                     { // depends on L orientation (same as upside-down L)
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3612,7 +3737,7 @@ void push_back_backwardsUpsideDownL(std::vector<std::pair<int, int>> &toVertical
                 {
                     if (bx != 0 && bz != 0 && (bx != box_x - 1 || bz != box_z - 1) && (d_x != 0 || bx != box_x - 1) && (d_z != 0 || bz != box_z - 1))
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }
@@ -3632,7 +3757,7 @@ void push_back_backwardsUpsideDownL(std::vector<std::pair<int, int>> &toVertical
                 {
                     if (dx != d_x - 1 && bz != box_z - 1 && bz != 0)
                     { // depends on L orientation
-                        toVerticalDelete.push_back({addressX - xMin, addressZ - zMin});
+                        toVerticalDelete.push_back({addressX, addressZ});
                     }
                 }
             }

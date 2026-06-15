@@ -2,6 +2,7 @@
 import anvil
 import time
 import os
+import gzip
 import tempfile
 
 from multiprocessing import Process, cpu_count, Queue
@@ -693,7 +694,7 @@ def main():
     print(f"Merging each cores' files into one big block file in: {os.getcwd()}, Stage 4/6\n")
 
     #now merge all files
-    with open(f"{base_folder_name}.world", "wb") as block_file:
+    with gzip.open(f"{base_folder_name}.world", "wb") as block_file:
         if custom:
             block_file.write(f"namespace bytes: {num_namespaces_bytes}\n".encode())
 

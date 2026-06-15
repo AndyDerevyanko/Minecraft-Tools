@@ -1,6 +1,7 @@
 # Exports a colored voxel mesh w/ culled internal faces to {world_name}.obj / .mtl
 
 import os
+import gzip
 
 IN_PATH = input("Enter path of world file fully: ").strip().strip('"').strip("'").rstrip('\\').strip()
 world_name = os.path.basename(IN_PATH)
@@ -22,7 +23,7 @@ if not os.path.exists(IDS_PATH):
 custom = True if input("Does your world have any custom (modded) blocks? : ").lower() == "y" else False
 
 # read binary header (open in binary mode to avoid codec errors from binary block data)
-with open(IN_PATH, "rb") as hdr:
+with gzip.open(IN_PATH, "rb") as hdr:
     grab = lambda: int(hdr.readline().decode('ascii').split(":")[1].strip())
     NS_BYTES      = grab() if custom else 0
     ID_PROP_BYTES = grab()
@@ -52,9 +53,14 @@ STUMPABLE_NAMES = {
     "dirt", "grass_block", "coarse_dirt", "podzol", "rooted_dirt",
     "moss_block", "pale_moss_block", "mud", "muddy_mangrove_roots",
     "mycelium", "farmland", "clay", "crimson_nylium", "warped_nylium",
+    "gravel",
 }
 
 def categorise(name):
+    if name == "tree_marker":
+        return "tree_marker"
+    if name == "foliage_marker":
+        return "foliage_marker"
     if name.endswith("_leaves"):
         return "leaf"
     if (name.endswith("_log") or name.endswith("_wood") or name.endswith("_hyphae")
@@ -72,7 +78,7 @@ def decode_coord(raw, nbytes):
 
 # read all blocks
 voxels = {}  # (x,y,z) -> category
-with open(IN_PATH, "rb") as wf:
+with gzip.open(IN_PATH, "rb") as wf:
     for _ in range(4 + int(custom)):
         wf.readline()
     while True:
@@ -93,10 +99,12 @@ if not voxels:
 
 # material colours
 MATERIALS = {
-    "leaf":      (0.13, 0.55, 0.13),  # green
-    "wood":      (0.40, 0.26, 0.13),  # brown
-    "stumpable": (0.40, 0.40, 0.40),  # dark grey
-    "other":     (0.72, 0.72, 0.72),  # light grey
+    "tree_marker":    (1.00, 1.00, 0.00),  # yellow  — confirmed trees
+    "foliage_marker": (1.00, 0.00, 0.00),  # red     — unconfirmed foliage
+    "leaf":           (0.13, 0.55, 0.13),  # green   — undetected leaves
+    "wood":           (0.40, 0.26, 0.13),  # brown   — undetected wood
+    "stumpable":      (0.40, 0.40, 0.40),  # dark grey
+    "other":          (0.72, 0.72, 0.72),  # light grey
 }
 
 with open(OUT_MTL, "w") as f:
