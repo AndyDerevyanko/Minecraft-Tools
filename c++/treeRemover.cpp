@@ -2396,6 +2396,14 @@ int main()
             stumpCoords.insert(packXYZ(bestBlock->x, bestBlock->y, bestBlock->z));
     }
 
+    // ── all-block coordinate set for confirmed trees (for removal) ───────
+    std::unordered_set<int64_t> treeAllCoords;
+    for (auto *treePtr : trees) {
+        for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
+            for (const auto &bl : lp->blocks)
+                treeAllCoords.insert(packXYZ(bl.x, bl.y, bl.z));
+    }
+
     // ── foliage coordinate set ────────────────────────────────────────────
     std::unordered_set<int64_t> foliageCoords;
     for (auto obj : foilage) {
@@ -2460,8 +2468,9 @@ int main()
 
             int64_t key = packXYZ(bx, by, bz);
             int outType;
-            if      (stumpCoords.count(key))    outType = treeMarkerID;
+            if      (stumpCoords.count(key))   outType = treeMarkerID;
             else if (foliageCoords.count(key)) outType = foliageMarkerID;
+            else if (treeAllCoords.count(key)) continue;   // remove non-stump tree blocks
             else                               outType = (int)readLE(buf.data() + inTypeOff, ID_PROP_BYTES);
 
             int propID = (int)readLE(buf.data() + inPropOff, ID_PROP_BYTES);
