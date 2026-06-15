@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <array>
 #include <stack>
+#include <thread>
 #include <zlib.h>
 
 #define TREE_TYPE_COUNT 11
@@ -1491,35 +1492,21 @@ int main()
     // to store leaves without stumps
     std::vector<Object *> foilage;
 
-    { // NOTE: trees' stumpable blocks set to -1
-        //  handle all trees by checking if:
-        //  1. Has any stumps
-        //  2. stump bottom is touching the ground and y-oriented, either 1x1, 2x2, or 3x3.
-        //  3. a complex check that will be outlined later on
+    { // filter block — Phase A (serial classify) + Phase B (parallel BFS/L-checks)
 
-        for (auto treeIdx = 0; treeIdx < trees.size();)
+        // ── Phase A: serial classify ─────────────────────────────────────────
+        // 0 = keep, 1 = foliage, 2 = discard
+        std::vector<int> tStatus((int)trees.size(), 0);
+
+        for (int ti = 0; ti < (int)trees.size(); ++ti)
         {
+            Tree *tree = trees[ti];
+
             bool hasValidStump = false;
-            Tree *tree = trees[treeIdx];
-            Layer *p = tree->head;
+            for (Layer *lp = tree->head; lp != nullptr && !hasValidStump; lp = lp->next)
+                for (const auto &bl : lp->blocks)
+                    if (stumpableBlocks.count(bl.type)) { hasValidStump = true; break; }
 
-            // see if the tree has a valid stump and remove all stumpable blocks in the process
-            while (p != nullptr && !hasValidStump)
-            {
-                for (auto bl : p->blocks)
-                {
-                    if (stumpableBlocks.count(bl.type)) // if a stumpable block exists, there will be a stump
-                    {
-                        hasValidStump = true;
-                        break;
-                    }
-                }
-                p = p->next;
-            }
-
-            // The stump layer (lowest Y containing any log/wood block) must have at least
-            // one y-oriented log OR any wood block. A cluster whose lowest layer is
-            // horizontal-logs-only is a building beam, not a tree stump.
             if (hasValidStump)
             {
                 int lowestLogY = INT_MAX;
@@ -1530,82 +1517,64 @@ int main()
 
                 bool stumpLayerValid = false;
                 if (lowestLogY != INT_MAX)
-                {
                     for (Layer *lp = tree->head; lp != nullptr && !stumpLayerValid; lp = lp->next)
                         for (const auto &lb : lp->blocks)
                             if (lb.y == lowestLogY && isWoodOrLog(lb.type))
                                 if (woodTypes.count(lb.type) || getAxis(lb.prop) == Y_)
                                     stumpLayerValid = true;
-                }
 
-                if (!stumpLayerValid)
-                    hasValidStump = false;
+                if (!stumpLayerValid) hasValidStump = false;
             }
 
-            // if no valid stumps, keep logs intact so the foilage-attachment pass
-            // can promote this object (with its trunk) when its base is adjacent to
-            // a confirmed tree (e.g. when Tree B's stump was swept into Tree A).
-            // Only discard if there are no leaves at all (log-only orphans have no use).
             if (!hasValidStump)
             {
                 bool hasLeaf = false;
-                p = tree->head;
-                while (p != nullptr && !hasLeaf)
-                {
-                    for (const auto &bl : p->blocks)
+                for (Layer *lp = tree->head; lp != nullptr && !hasLeaf; lp = lp->next)
+                    for (const auto &bl : lp->blocks)
                         if (leafTypes.count(bl.type)) { hasLeaf = true; break; }
-                    p = p->next;
-                }
-
-                if (!hasLeaf)
-                {
-                    // no leaves and no stump — discard entirely
-                    trees[treeIdx] = trees.back();
-                    trees.pop_back();
-                    continue;
-                }
-                else
-                {
-                    // move to foilage WITH logs; foilage-attachment can promote the
-                    // full segment to confirmed if its base touches a confirmed block.
-                    foilage.push_back(trees[treeIdx]);
-                    trees[treeIdx] = trees.back();
-                    trees.pop_back();
-                    continue;
-                }
+                tStatus[ti] = hasLeaf ? 1 : 2;
             }
             else
             {
-
-                // remove trees that have no leaves (we will check for "skeleton trees" later in this or another program, but what we have done thus far is insufficient)
                 bool isLeafless = true;
-                p = tree->head;
+                for (Layer *lp = tree->head; lp != nullptr && isLeafless; lp = lp->next)
+                    for (const auto &bl : lp->blocks)
+                        if (leafTypes.count(bl.type)) { isLeafless = false; break; }
+                if (isLeafless) tStatus[ti] = 2;
+            }
+        }
 
-                while (p != nullptr)
-                {
-                    for (auto &bl : p->blocks)
-                    {
-                        if (leafTypes.count(bl.type))
-                        {
-                            isLeafless = false;
-                            break;
-                        }
-                    }
-                    p = p->next;
-                }
+        // partition: kept trees stay in trees; foliage → foilage; discard dropped
+        {
+            std::vector<Tree *> kept;
+            kept.reserve(trees.size());
+            for (int i = 0; i < (int)trees.size(); ++i)
+            {
+                if      (tStatus[i] == 1) foilage.push_back(trees[i]);
+                else if (tStatus[i] == 0) kept.push_back(trees[i]);
+                // tStatus[i] == 2 → discard (same as original: pointer dropped)
+            }
+            trees = std::move(kept);
+        }
 
-                if (isLeafless)
+        // ── Phase B: BFS + L-checks + stumpable removal (parallel) ──────────
+        {
+            int n = (int)trees.size();
+            unsigned int nT = std::max(1u, std::thread::hardware_concurrency());
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+            // Each thread handles a disjoint range of tree indices.
+            // All per-tree state (xMin/xMax/etc.) is declared locally inside the
+            // lambda so there are no shared writes and no race conditions.
+            auto doWork = [&](int start, int end)
+            {
+                for (int ti = start; ti < end; ++ti)
                 {
-                    // delete leafless tree
-                    trees[treeIdx] = trees.back();
-                    trees.pop_back();
-                    continue;
-                }
-                else
-                {
-                    // Remove horizontal log clusters not reachable from any y-oriented log
-                    // via log-only adjacency. Prevents building beams (absorbed only through
-                    // leaf contact) from remaining in the detected tree.
+                    Tree *tree = trees[ti];
+                    Layer *p;
+
+                    // ── log-connectivity BFS ─────────────────────────────────
                     {
                         auto logPack = [](int x, int y, int z) -> int64_t {
                             return ((int64_t)(x + (1 << 25)) & 0x3FFFFFF)
@@ -1613,7 +1582,6 @@ int main()
                                  | (((int64_t)(y + 64) & 0xFFF) << 52);
                         };
 
-                        // pos → axis: Y_ for wood/unknown (unrestricted), X_/Z_ for horizontal logs
                         std::unordered_set<int64_t> allLogs;
                         std::unordered_map<int64_t, int> logAxis;
                         for (Layer *lp = tree->head; lp != nullptr; lp = lp->next)
@@ -1626,29 +1594,26 @@ int main()
                                 }
 
                         std::unordered_set<int64_t> reachLogs;
-                        std::stack<std::array<int,3>> stk;
+                        std::stack<std::array<int,3>> bfsStk;
                         for (Layer *lp = tree->head; lp != nullptr; lp = lp->next)
                             for (const auto &lb : lp->blocks)
                                 if (isWoodOrLog(lb.type) && (woodTypes.count(lb.type) || getAxis(lb.prop) == Y_)) {
                                     int64_t k = logPack(lb.x, lb.y, lb.z);
                                     if (reachLogs.insert(k).second)
-                                        stk.push({lb.x, lb.y, lb.z});
+                                        bfsStk.push({lb.x, lb.y, lb.z});
                                 }
 
-                        // Horizontal logs (axis X or Z) may only expand left/right/forward/back —
-                        // never up or down. This stops building columns (stacked X/Z logs) from
-                        // staying connected through a single trunk-adjacent log.
                         const int dirs6[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
-                        while (!stk.empty()) {
-                            std::array<int,3> cur = stk.top(); stk.pop();
+                        while (!bfsStk.empty()) {
+                            std::array<int,3> cur = bfsStk.top(); bfsStk.pop();
                             int64_t curKey = logPack(cur[0], cur[1], cur[2]);
                             bool hLog = (logAxis[curKey] != Y_);
                             for (const auto &d : dirs6) {
-                                if (hLog && d[1] != 0) continue; // skip Y neighbours for horizontal logs
+                                if (hLog && d[1] != 0) continue;
                                 int nx = cur[0]+d[0], ny = cur[1]+d[1], nz = cur[2]+d[2];
                                 int64_t nk = logPack(nx, ny, nz);
                                 if (allLogs.count(nk) && reachLogs.insert(nk).second)
-                                    stk.push({nx, ny, nz});
+                                    bfsStk.push({nx, ny, nz});
                             }
                         }
 
@@ -1658,377 +1623,283 @@ int main()
                                 if (isWoodOrLog(blks[bi].type) &&
                                     !reachLogs.count(logPack(blks[bi].x, blks[bi].y, blks[bi].z)))
                                     { blks[bi] = blks.back(); blks.pop_back(); }
-                                else
-                                    ++bi;
+                                else ++bi;
                             }
                         }
                     }
 
-                    // now we start complex logic to remove potential house-pieces
-                    // 1. all L paterns or | patterns of y_ blocks and all above them will be removed, as these are unnatural shapes
-                    // 2. All z_ or x_ axis blocks must touch log of y_ or opposite variety on corresponding axis OR
-                    // they have to touch a leaf in cross-> surrounding cube -> cross (sequence of possible cross-sections)
-                    // and should never appear in trees
-                    // 3. Final orphan check: make sure all tree blocks are connected somehow after these checks/removals
-
-                    // check 1 and 2:
-
-                    // get max/mins for the axis map dimensions
-                    xMin = INT_MAX, zMin = INT_MAX;
-                    xMax = INT_MIN, zMax = INT_MIN;
-
-                    p = tree->head;
-                    while (p != nullptr)
+                    // ── L-shape & axis checks ────────────────────────────────
                     {
-                        for (auto &bl : p->blocks)
+                        // local min/max/size — each thread stack frame owns these,
+                        // so no writes race with the outer-scope variables of the same name
+                        int xMin = INT_MAX, zMin = INT_MAX;
+                        int xMax = INT_MIN, zMax = INT_MIN;
+
+                        p = tree->head;
+                        while (p != nullptr)
                         {
-                            int x = bl.x;
-                            int z = bl.z;
-
-                            if (z < zMin)
-                                zMin = z;
-
-                            if (z > zMax)
-                                zMax = z;
-
-                            if (x < xMin)
-                                xMin = x;
-
-                            if (x > xMax)
-                                xMax = x;
-                        }
-                        p = p->next;
-                    }
-
-                    xSize = 1 + xMax - xMin;
-                    zSize = 1 + zMax - zMin;
-
-                    // for L check
-                    std::vector<std::pair<int, int>> toVerticalDelete;
-
-                    // 3 maps of pointers to each bock in the block vectors of the trees:
-                    // (I'd use an axis map since thats all we need, but then id have to search for every block i want to delete)
-                    block **blockMapTop = nullptr;
-                    block **blockMapBottom = nullptr;
-                    block **blockMap = nullptr;
-
-                    Layer *topL = nullptr;
-                    p = nullptr; // this layer
-                    Layer *bottomL = tree->head;
-
-                    int sz = xSize * zSize;
-
-                    while (true)
-                    {
-                        // shift maps (first iteration is all nullptrs, then bottomL is made)
-                        delete[] blockMapTop;
-                        blockMapTop = blockMap;
-                        blockMap = blockMapBottom;
-
-                        blockMapBottom = new block *[sz];
-
-                        for (int i = 0; i < sz; i++)
-                            blockMapBottom[i] = nullptr;
-
-                        // set bottom block map as it goes first, and point all others to it
-                        if (bottomL != nullptr)
-                        {
-                            auto &blks = bottomL->blocks;
-                            for (auto &bl : blks)
-                                blockMapBottom[bl.x - xMin + xSize * (bl.z - zMin)] = &bl;
-                        }
-
-                        // use block maps to do 1. and 2.
-                        if (p != nullptr)
-                        { // if we are on zeroth layer do nothing
-                            // if we are on nth or top layer
-
-                            for (int i = 0; i < xSize; i++)
-                                for (int j = 0; j < zSize;)
-                                {
-                                    auto &bl = blockMap[i + xSize * j];
-
-                                    if (bl == nullptr)
-                                    {
-                                        j++;
-                                        continue;
-                                    }
-
-                                    auto type = bl->type;
-
-                                    if (!isWoodOrLog(type))
-                                    {
-                                        j++;
-                                        continue;
-                                    }
-
-                                    // 1. starts here
-                                    {
-                                        int box_x, box_z, d_x, d_z;
-
-                                        if (isUprightL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
-                                        {
-                                            if (!isSquare(blockMap, i, j, xSize, zSize))
-                                            {
-                                                push_back_uprightL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
-                                                j++;
-                                                continue;
-                                            }
-                                        }
-                                        else if (isBackwardsUprightL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
-                                        {
-                                            if (!isSquare(blockMap, i, j, xSize, zSize))
-                                            {
-                                                push_back_backwardsUprightL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
-                                                j++;
-                                                continue;
-                                            }
-                                        }
-                                        else if (isUpsideDownL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
-                                        {
-                                            if (!isSquare(blockMap, i, j, xSize, zSize))
-                                            {
-                                                push_back_upsideDownL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
-                                                j++;
-                                                continue;
-                                            }
-                                        }
-                                        else if (isBackwardsUpsideDownL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
-                                        {
-                                            if (!isSquare(blockMap, i, j, xSize, zSize))
-                                            {
-                                                push_back_backwardsUpsideDownL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
-                                                j++;
-                                                continue;
-                                            }
-                                        }
-                                    }
-
-                                    //  1. ends, 2. starts
-                                    int thisAxis = getAxis(bl->prop);
-
-                                    bool isValid = false;
-                                    int otherAxis;
-                                    block *otherBlock;
-
-                                    // if wood/log is x or z-oriented
-                                    if (thisAxis == X_)
-                                    {
-                                        if (i - 1 >= 0)
-                                        {
-                                            otherBlock = blockMap[i - 1 + xSize * j];
-                                            if (otherBlock != nullptr)
-                                            {
-                                                otherAxis = getAxis(otherBlock->prop);
-                                                if (otherAxis == Y_ || otherAxis == Z_)
-                                                {
-                                                    j++;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-
-                                        if (i + 1 < xSize)
-                                        {
-                                            otherBlock = blockMap[i + 1 + xSize * j];
-                                            if (otherBlock != nullptr)
-                                            {
-                                                otherAxis = getAxis(otherBlock->prop);
-                                                if (otherAxis == Y_ || otherAxis == Z_)
-                                                {
-                                                    j++;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else if (thisAxis == Z_)
-                                    {
-                                        if (j - 1 >= 0)
-                                        {
-                                            otherBlock = blockMap[i + xSize * (j - 1)];
-                                            if (otherBlock != nullptr)
-                                            {
-                                                otherAxis = getAxis(otherBlock->prop);
-                                                if (otherAxis == Y_ || otherAxis == X_)
-                                                {
-                                                    j++;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-
-                                        if (j + 1 < zSize)
-                                        {
-                                            otherBlock = blockMap[i + xSize * (j + 1)];
-                                            if (otherBlock != nullptr)
-                                            {
-                                                otherAxis = getAxis(otherBlock->prop);
-                                                if (otherAxis == Y_ || otherAxis == X_)
-                                                {
-                                                    j++;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    else
-                                    { // axis is Y
-                                        j++;
-                                        continue;
-                                    }
-
-                                    // iterate over all direct-surroundings for leaves
-                                    for (int dx = -1; dx <= 1 && !isValid; dx++) // break thru all if we determine block is valid
-                                    {
-                                        for (int dy = -1; dy <= 1; dy++)
-                                        {
-                                            if (dy == 1 && topL == nullptr)
-                                                continue;
-
-                                            if (dy == -1 && bottomL == nullptr)
-                                                continue;
-
-                                            for (int dz = (dy == 0 ? -1 : (dx == 0 ? -1 : 0)); dz <= (dy == 0 ? 1 : (dx == 0 ? 1 : 0)); dz++)
-                                            // dz can only cover diagonals when dy == 0
-                                            { // MAKE SURE WE DO NOT LOOP OVER THE BLOCK WE PROCESSED ABOVE AGAIN
-                                                if (dx == 0 && dz == 0 && dy == 0)
-                                                    continue;
-
-                                                int ni = i + dx;
-                                                int nj = j + dz;
-                                                auto address = ni + xSize * nj;
-
-                                                if (ni < 0 || ni >= xSize || nj < 0 || nj >= zSize)
-                                                    continue;
-
-                                                if (dy == 0)
-                                                {
-                                                    otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
-                                                    {
-                                                        isValid = true;
-                                                        j++;
-                                                        break;
-                                                    }
-                                                }
-
-                                                else if (dy == -1)
-                                                {
-                                                    otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
-                                                    {
-                                                        isValid = true;
-                                                        j++;
-                                                        break;
-                                                    }
-                                                }
-
-                                                else if (dy == 1)
-                                                {
-                                                    otherBlock = blockMap[address];
-                                                    if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
-                                                    {
-                                                        isValid = true;
-                                                        j++;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (!isValid)
-                                    {
-                                        bl->prop = -2; // mark for deletion: we will use -2 as the "toDelete" index
-                                        j++;
-                                    }
-                                }
-                        }
-
-                        // shift layers
-                        topL = p;
-                        p = bottomL;
-                        if (bottomL != nullptr)
-                            bottomL = bottomL->next;
-                        else
-                            break;
-                    }
-
-                    // delete our stuff
-                    delete[] blockMapBottom;
-                    delete[] blockMapTop;
-                    delete[] blockMap;
-
-                    // remove toDelete blocks and their lines by: setting the lines to prop = 2, then delete later
-                    // also: remove blocks already marked for deletion
-                    p = tree->head;
-
-                    // we reuse blockMap: its has an array of nullptrs, and we can reuse
-                    blockMap = new block *[sz];
-
-                    while (p != nullptr)
-                    {
-                        // clear/set
-                        for (int i = 0; i < sz; i++)
-                            blockMap[i] = nullptr;
-
-                        // construct layer
-                        for (auto &bl : p->blocks)
-                            blockMap[bl.x - xMin + xSize * (bl.z - zMin)] = &bl;
-
-                        // delete  the vertical blocks in layer
-                        for (auto i : toVerticalDelete)
-                        {
-                            auto &bl = blockMap[i.first + xSize * i.second];
-                            if (bl != nullptr)
-                                bl->prop = -2; // set prop to -2
-                        }
-
-                        // delete these blocks and previous ones marked toDelete
-                        auto &blocks = p->blocks;
-                        for (int i = 0; i < blocks.size();)
-                        {
-                            auto &block = blocks[i];
-                            if (block.prop == -2)
+                            for (auto &bl : p->blocks)
                             {
-                                block = blocks.back();
-                                blocks.pop_back();
+                                int x = bl.x;
+                                int z = bl.z;
+                                if (z < zMin) zMin = z;
+                                if (z > zMax) zMax = z;
+                                if (x < xMin) xMin = x;
+                                if (x > xMax) xMax = x;
                             }
-                            else
-                                i++;
+                            p = p->next;
                         }
 
+                        int xSize = 1 + xMax - xMin;
+                        int zSize = 1 + zMax - zMin;
+
+                        std::vector<std::pair<int, int>> toVerticalDelete;
+
+                        block **blockMapTop    = nullptr;
+                        block **blockMapBottom = nullptr;
+                        block **blockMap       = nullptr;
+
+                        Layer *topL    = nullptr;
+                        p              = nullptr;
+                        Layer *bottomL = tree->head;
+
+                        int sz = xSize * zSize;
+
+                        while (true)
+                        {
+                            delete[] blockMapTop;
+                            blockMapTop   = blockMap;
+                            blockMap      = blockMapBottom;
+
+                            blockMapBottom = new block *[sz];
+                            for (int i = 0; i < sz; i++) blockMapBottom[i] = nullptr;
+
+                            if (bottomL != nullptr)
+                            {
+                                auto &blks = bottomL->blocks;
+                                for (auto &bl : blks)
+                                    blockMapBottom[bl.x - xMin + xSize * (bl.z - zMin)] = &bl;
+                            }
+
+                            if (p != nullptr)
+                            {
+                                for (int i = 0; i < xSize; i++)
+                                    for (int j = 0; j < zSize;)
+                                    {
+                                        auto &bl = blockMap[i + xSize * j];
+
+                                        if (bl == nullptr) { j++; continue; }
+
+                                        auto type = bl->type;
+
+                                        if (!isWoodOrLog(type)) { j++; continue; }
+
+                                        // 1. L-shape check
+                                        {
+                                            int box_x, box_z, d_x, d_z;
+
+                                            if (isUprightL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
+                                            {
+                                                if (!isSquare(blockMap, i, j, xSize, zSize))
+                                                {
+                                                    push_back_uprightL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
+                                                    j++; continue;
+                                                }
+                                            }
+                                            else if (isBackwardsUprightL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
+                                            {
+                                                if (!isSquare(blockMap, i, j, xSize, zSize))
+                                                {
+                                                    push_back_backwardsUprightL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
+                                                    j++; continue;
+                                                }
+                                            }
+                                            else if (isUpsideDownL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
+                                            {
+                                                if (!isSquare(blockMap, i, j, xSize, zSize))
+                                                {
+                                                    push_back_upsideDownL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
+                                                    j++; continue;
+                                                }
+                                            }
+                                            else if (isBackwardsUpsideDownL(blockMap, blockMapBottom, i, j, xSize, zSize, box_x, box_z, d_x, d_z))
+                                            {
+                                                if (!isSquare(blockMap, i, j, xSize, zSize))
+                                                {
+                                                    push_back_backwardsUpsideDownL(toVerticalDelete, i, j, xSize, zSize, xMin, zMin, box_x, box_z, d_x, d_z);
+                                                    j++; continue;
+                                                }
+                                            }
+                                        }
+
+                                        // 2. axis check
+                                        int thisAxis = getAxis(bl->prop);
+
+                                        bool isValid = false;
+                                        int otherAxis;
+                                        block *otherBlock;
+
+                                        if (thisAxis == X_)
+                                        {
+                                            if (i - 1 >= 0)
+                                            {
+                                                otherBlock = blockMap[i - 1 + xSize * j];
+                                                if (otherBlock != nullptr)
+                                                {
+                                                    otherAxis = getAxis(otherBlock->prop);
+                                                    if (otherAxis == Y_ || otherAxis == Z_) { j++; continue; }
+                                                }
+                                            }
+                                            if (i + 1 < xSize)
+                                            {
+                                                otherBlock = blockMap[i + 1 + xSize * j];
+                                                if (otherBlock != nullptr)
+                                                {
+                                                    otherAxis = getAxis(otherBlock->prop);
+                                                    if (otherAxis == Y_ || otherAxis == Z_) { j++; continue; }
+                                                }
+                                            }
+                                        }
+                                        else if (thisAxis == Z_)
+                                        {
+                                            if (j - 1 >= 0)
+                                            {
+                                                otherBlock = blockMap[i + xSize * (j - 1)];
+                                                if (otherBlock != nullptr)
+                                                {
+                                                    otherAxis = getAxis(otherBlock->prop);
+                                                    if (otherAxis == Y_ || otherAxis == X_) { j++; continue; }
+                                                }
+                                            }
+                                            if (j + 1 < zSize)
+                                            {
+                                                otherBlock = blockMap[i + xSize * (j + 1)];
+                                                if (otherBlock != nullptr)
+                                                {
+                                                    otherAxis = getAxis(otherBlock->prop);
+                                                    if (otherAxis == Y_ || otherAxis == X_) { j++; continue; }
+                                                }
+                                            }
+                                        }
+                                        else
+                                        { // Y axis — always valid
+                                            j++; continue;
+                                        }
+
+                                        for (int dx = -1; dx <= 1 && !isValid; dx++)
+                                        {
+                                            for (int dy = -1; dy <= 1; dy++)
+                                            {
+                                                if (dy == 1 && topL == nullptr) continue;
+                                                if (dy == -1 && bottomL == nullptr) continue;
+
+                                                for (int dz = (dy == 0 ? -1 : (dx == 0 ? -1 : 0)); dz <= (dy == 0 ? 1 : (dx == 0 ? 1 : 0)); dz++)
+                                                {
+                                                    if (dx == 0 && dz == 0 && dy == 0) continue;
+
+                                                    int ni = i + dx;
+                                                    int nj = j + dz;
+                                                    auto address = ni + xSize * nj;
+
+                                                    if (ni < 0 || ni >= xSize || nj < 0 || nj >= zSize) continue;
+
+                                                    if (dy == 0)
+                                                    {
+                                                        otherBlock = blockMap[address];
+                                                        if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
+                                                        { isValid = true; j++; break; }
+                                                    }
+                                                    else if (dy == -1)
+                                                    {
+                                                        otherBlock = blockMap[address];
+                                                        if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
+                                                        { isValid = true; j++; break; }
+                                                    }
+                                                    else if (dy == 1)
+                                                    {
+                                                        otherBlock = blockMap[address];
+                                                        if (otherBlock != nullptr && getAxis(otherBlock->prop) == -1)
+                                                        { isValid = true; j++; break; }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (!isValid)
+                                        {
+                                            bl->prop = -2;
+                                            j++;
+                                        }
+                                    }
+                            }
+
+                            topL = p;
+                            p = bottomL;
+                            if (bottomL != nullptr) bottomL = bottomL->next;
+                            else break;
+                        }
+
+                        delete[] blockMapBottom;
+                        delete[] blockMapTop;
+                        delete[] blockMap;
+
+                        p = tree->head;
+                        blockMap = new block *[sz];
+
+                        while (p != nullptr)
+                        {
+                            for (int i = 0; i < sz; i++) blockMap[i] = nullptr;
+
+                            for (auto &bl : p->blocks)
+                                blockMap[bl.x - xMin + xSize * (bl.z - zMin)] = &bl;
+
+                            for (auto idx : toVerticalDelete)
+                            {
+                                auto &blk = blockMap[idx.first + xSize * idx.second];
+                                if (blk != nullptr) blk->prop = -2;
+                            }
+
+                            auto &blks = p->blocks;
+                            for (int i = 0; i < (int)blks.size();)
+                            {
+                                if (blks[i].prop == -2) { blks[i] = blks.back(); blks.pop_back(); }
+                                else ++i;
+                            }
+
+                            p = p->next;
+                        }
+
+                        delete[] blockMap;
+                    }
+
+                    // ── remove stumpable blocks ──────────────────────────────
+                    p = tree->head;
+                    while (p != nullptr)
+                    {
+                        auto &blks = p->blocks;
+                        for (int i = 0; i < (int)blks.size();)
+                        {
+                            if (!isAnyTreeBlock(blks[i].type)) { blks[i] = blks.back(); blks.pop_back(); }
+                            else ++i;
+                        }
                         p = p->next;
                     }
-
-                    delete[] blockMap;
                 }
-            }
+            };
+#pragma GCC diagnostic pop
 
-            // remove stumpable blocks
-            p = tree->head;
-
-            while (p != nullptr)
+            if (n > 0)
             {
-                auto &blks = p->blocks;
-                for (int i = 0; i < blks.size();)
+                int chunk = std::max(1, n / (int)nT);
+                std::vector<std::thread> threads;
+                for (unsigned int t = 0; t < nT; ++t)
                 {
-                    auto &bl = blks[i];
-                    auto type = bl.type;
-                    if (!isAnyTreeBlock(type))
-                    {
-
-                        bl = blks.back();
-                        blks.pop_back();
-                    }
-                    else
-                        i++;
+                    int s = t * chunk;
+                    int e = (t + 1 == nT) ? n : s + chunk;
+                    if (s < e) threads.emplace_back(doWork, s, e);
                 }
-
-                p = p->next;
+                for (auto &th : threads) th.join();
             }
-            treeIdx++;
         }
     }
 
@@ -2476,15 +2347,57 @@ int main()
         }
     }
 
-    // ── build sets of (x,y,z) belonging to confirmed trees and foliage ───
-    std::unordered_set<int64_t> treeCoords, foliageCoords;
-    for (auto tree : trees) {
-        Layer *p = tree->head;
-        while (p != nullptr) {
-            for (const auto &bl : p->blocks) treeCoords.insert(packXYZ(bl.x, bl.y, bl.z));
-            p = p->next;
+    // ── build lookup sets from original world data (blocksByY is unmodified) ─
+    std::unordered_set<int64_t> occupiedXYZ, stumpableXYZ;
+    for (auto &[y, blks] : blocksByY)
+        for (const auto &b : blks) {
+            occupiedXYZ.insert(packXYZ(b.x, b.y, b.z));
+            if (stumpableBlocks.count(b.type))
+                stumpableXYZ.insert(packXYZ(b.x, b.y, b.z));
         }
+
+    // ── find stump block for each confirmed tree ──────────────────────────
+    // Priority: Y-log above stumpable (1) > wood above stumpable (2) >
+    //           Y-log above any solid (3) > wood above any solid (4)
+    std::unordered_set<int64_t> stumpCoords;
+    for (auto *treePtr : trees) {
+        int lowestLogY = INT_MAX;
+        for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
+            for (const auto &bl : lp->blocks)
+                if (isWoodOrLog(bl.type) && bl.y < lowestLogY)
+                    lowestLogY = bl.y;
+
+        if (lowestLogY == INT_MAX) continue;
+
+        const block *bestBlock = nullptr;
+        int bestPri = 6;
+
+        for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
+            for (const auto &bl : lp->blocks)
+                if (bl.y == lowestLogY && isWoodOrLog(bl.type))
+                {
+                    int64_t below = packXYZ(bl.x, lowestLogY - 1, bl.z);
+                    bool abvStump = stumpableXYZ.count(below) > 0;
+                    bool abvSolid = occupiedXYZ.count(below) > 0;
+                    bool isYLog   = !woodTypes.count(bl.type) && getAxis(bl.prop) == Y_;
+                    bool isWoodBl = woodTypes.count(bl.type) > 0;
+
+                    int pri;
+                    if      (isYLog   && abvStump) pri = 1;
+                    else if (isWoodBl && abvStump) pri = 2;
+                    else if (isYLog   && abvSolid) pri = 3;
+                    else if (isWoodBl && abvSolid) pri = 4;
+                    else                           pri = 5;
+
+                    if (pri < bestPri) { bestPri = pri; bestBlock = &bl; }
+                }
+
+        if (bestBlock != nullptr)
+            stumpCoords.insert(packXYZ(bestBlock->x, bestBlock->y, bestBlock->z));
     }
+
+    // ── foliage coordinate set ────────────────────────────────────────────
+    std::unordered_set<int64_t> foliageCoords;
     for (auto obj : foilage) {
         Layer *p = obj->head;
         while (p != nullptr) {
@@ -2547,7 +2460,7 @@ int main()
 
             int64_t key = packXYZ(bx, by, bz);
             int outType;
-            if      (treeCoords.count(key))    outType = treeMarkerID;
+            if      (stumpCoords.count(key))    outType = treeMarkerID;
             else if (foliageCoords.count(key)) outType = foliageMarkerID;
             else                               outType = (int)readLE(buf.data() + inTypeOff, ID_PROP_BYTES);
 
@@ -2573,7 +2486,7 @@ int main()
         dst << foliageMarkerID << "=foliage_marker\n";
     }
 
-    std::cout << "DEBUG treeCoords: " << treeCoords.size() << "  foliageCoords: " << foliageCoords.size() << std::endl;
+    std::cout << "DEBUG stumpCoords: " << stumpCoords.size() << "  foliageCoords: " << foliageCoords.size() << std::endl;
     std::cout << "Tree data written to " << outStem << "_trees.world" << std::endl;
 
     // close all world files
