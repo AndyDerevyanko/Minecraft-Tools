@@ -99,7 +99,7 @@ if not voxels:
 
 # material colours
 MATERIALS = {
-    "tree_marker":    (1.00, 1.00, 0.00),  # yellow  — confirmed trees
+    "tree_marker":    (0.50, 0.00, 0.80),  # purple  — confirmed tree stumps
     "foliage_marker": (1.00, 0.00, 0.00),  # red     — unconfirmed foliage
     "leaf":           (0.13, 0.55, 0.13),  # green   — undetected leaves
     "wood":           (0.40, 0.26, 0.13),  # brown   — undetected wood
