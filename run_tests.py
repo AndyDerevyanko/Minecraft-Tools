@@ -4,7 +4,24 @@ import glob
 import subprocess
 
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-TREE_REMOVER  = os.path.join(SCRIPT_DIR, "c++", "build", "Debug", "outDebug.exe")
+TREE_REMOVER  = os.path.join(SCRIPT_DIR, "c++", "treeRemover.exe")
+
+# ---------------------------------------------------------------------------
+# C++ compilation
+# ---------------------------------------------------------------------------
+
+COMPILER  = r"C:\msys64\mingw64\bin\g++.exe"
+CPP_FLAGS = ["-std=c++20", "-O2"]
+
+# (display name, source path, output exe path)
+CPP_TOOLS = [
+    ("treeRemover",
+        os.path.join(SCRIPT_DIR, "c++", "treeRemover.cpp"),
+        os.path.join(SCRIPT_DIR, "c++", "treeRemover.exe")),
+    ("buildingCatcher",
+        os.path.join(SCRIPT_DIR, "c++", "buildingCatcher", "buildingCatcher.cpp"),
+        os.path.join(SCRIPT_DIR, "c++", "buildingCatcher", "buildingCatcher.exe")),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +145,33 @@ def open_viewer(path):
     os.startfile(path)
 
 
+def compile_tools():
+    """Compile every C++ tool fresh with g++. Return True if all succeeded."""
+    if not os.path.isfile(COMPILER):
+        print(f"  WARNING: compiler not found at {COMPILER}")
+        print(f"           skipping compilation, using existing exes.\n")
+        return True
+
+    all_ok = True
+    for name, src, exe in CPP_TOOLS:
+        if not os.path.isfile(src):
+            print(f"  MISSING  {name}  (source not found: {src})")
+            all_ok = False
+            continue
+
+        cmd = [COMPILER, *CPP_FLAGS, src, "-o", exe, "-lz"]
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=SCRIPT_DIR)
+        if r.returncode == 0:
+            print(f"  COMPILED {name}  →  {os.path.relpath(exe, SCRIPT_DIR)}")
+        else:
+            all_ok = False
+            print(f"  FAILED   {name}")
+            for ln in (r.stderr or r.stdout).strip().splitlines():
+                print(f"           {ln}")
+    print()
+    return all_ok
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -154,6 +198,14 @@ def _run():
         return
 
     print(f"Found {len(test_paths)} test file(s).\n")
+
+    # ---- compile pass ----
+    print("=" * 55)
+    print("COMPILE")
+    print("=" * 55)
+    if not compile_tools():
+        print("Compilation failed — aborting.")
+        return
 
     tree_remover_available = os.path.isfile(TREE_REMOVER)
     if not tree_remover_available:
