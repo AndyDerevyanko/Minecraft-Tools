@@ -27,3 +27,10 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+#Claude Code sync folder
+claude-code-sync/
+#Compiled binaries
+c++/*.exe
+#Temp compile output
+compile_err.txt
+compile_out.txt

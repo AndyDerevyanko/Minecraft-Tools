@@ -1498,7 +1498,16 @@ int main()
         // 0 = keep, 1 = foliage, 2 = discard
         std::vector<int> tStatus((int)trees.size(), 0);
 
-        for (int ti = 0; ti < (int)trees.size(); ++ti)
+        {
+            int n = (int)trees.size();
+            unsigned int nT = std::max(1u, std::thread::hardware_concurrency());
+
+            // classify is per-tree independent: each index writes only its own
+            // tStatus slot (distinct elements, no reallocation), so the work
+            // splits across threads with no shared writes and no races
+            auto classify = [&](int start, int end)
+            {
+                for (int ti = start; ti < end; ++ti)
         {
             Tree *tree = trees[ti];
 
@@ -1541,6 +1550,21 @@ int main()
                     for (const auto &bl : lp->blocks)
                         if (leafTypes.count(bl.type)) { isLeafless = false; break; }
                 if (isLeafless) tStatus[ti] = 2;
+            }
+        }
+            };
+
+            if (n > 0)
+            {
+                int chunk = std::max(1, n / (int)nT);
+                std::vector<std::thread> threads;
+                for (unsigned int t = 0; t < nT; ++t)
+                {
+                    int s = t * chunk;
+                    int e = (t + 1 == nT) ? n : s + chunk;
+                    if (s < e) threads.emplace_back(classify, s, e);
+                }
+                for (auto &th : threads) th.join();
             }
         }
 
@@ -2357,40 +2381,62 @@ int main()
         }
 
     // ── find stump block for each confirmed tree ──────────────────────────
-    // Priority: Y-log above stumpable (1) > wood above stumpable (2) >
-    //           Y-log above any solid (3) > wood above any solid (4)
+    // The stump base is the lowest Y-axis log that sits directly above a
+    // non-air block; a stumpable block below is preferred over any other solid.
+    // Priority (lower = better): y-log above stumpable (1) > wood above stumpable
+    // (2) > y-log above any solid (3) > wood above any solid (4).
+    // Within the same tier the lowest block wins — that is the true base.
     std::unordered_set<int64_t> stumpCoords;
     for (auto *treePtr : trees) {
-        int lowestLogY = INT_MAX;
-        for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
-            for (const auto &bl : lp->blocks)
-                if (isWoodOrLog(bl.type) && bl.y < lowestLogY)
-                    lowestLogY = bl.y;
-
-        if (lowestLogY == INT_MAX) continue;
-
         const block *bestBlock = nullptr;
-        int bestPri = 6;
+        int bestPri = INT_MAX;
+        int bestY   = INT_MAX;
 
         for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
             for (const auto &bl : lp->blocks)
-                if (bl.y == lowestLogY && isWoodOrLog(bl.type))
+            {
+                if (!isWoodOrLog(bl.type)) continue;
+
+                bool isYLog   = !woodTypes.count(bl.type) && getAxis(bl.prop) == Y_;
+                bool isWoodBl = woodTypes.count(bl.type) > 0;
+
+                // a horizontal-axis log cannot anchor a stump
+                if (!isYLog && !isWoodBl) continue;
+
+                int64_t below = packXYZ(bl.x, bl.y - 1, bl.z);
+                bool abvStump = stumpableXYZ.count(below) > 0;
+                bool abvSolid = occupiedXYZ.count(below) > 0;
+
+                // base must rest directly on a non-air block
+                if (!abvSolid) continue;
+
+                int pri;
+                if      (isYLog   && abvStump) pri = 1;
+                else if (isWoodBl && abvStump) pri = 2;
+                else if (isYLog)               pri = 3;
+                else                           pri = 4;
+
+                if (pri < bestPri || (pri == bestPri && bl.y < bestY))
                 {
-                    int64_t below = packXYZ(bl.x, lowestLogY - 1, bl.z);
-                    bool abvStump = stumpableXYZ.count(below) > 0;
-                    bool abvSolid = occupiedXYZ.count(below) > 0;
-                    bool isYLog   = !woodTypes.count(bl.type) && getAxis(bl.prop) == Y_;
-                    bool isWoodBl = woodTypes.count(bl.type) > 0;
-
-                    int pri;
-                    if      (isYLog   && abvStump) pri = 1;
-                    else if (isWoodBl && abvStump) pri = 2;
-                    else if (isYLog   && abvSolid) pri = 3;
-                    else if (isWoodBl && abvSolid) pri = 4;
-                    else                           pri = 5;
-
-                    if (pri < bestPri) { bestPri = pri; bestBlock = &bl; }
+                    bestPri   = pri;
+                    bestY     = bl.y;
+                    bestBlock = &bl;
                 }
+            }
+
+        // fallback: no log rests on a tracked block — mark the lowest log so
+        // every confirmed tree still receives a stump marker
+        if (bestBlock == nullptr)
+        {
+            int lowestY = INT_MAX;
+            for (Layer *lp = treePtr->head; lp != nullptr; lp = lp->next)
+                for (const auto &bl : lp->blocks)
+                    if (isWoodOrLog(bl.type) && bl.y < lowestY)
+                    {
+                        lowestY   = bl.y;
+                        bestBlock = &bl;
+                    }
+        }
 
         if (bestBlock != nullptr)
             stumpCoords.insert(packXYZ(bestBlock->x, bestBlock->y, bestBlock->z));
