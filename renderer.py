@@ -2,6 +2,8 @@
 
 import os
 import gzip
+import random
+import colorsys
 
 IN_PATH = input("Enter path of world file fully: ").strip().strip('"').strip("'").rstrip('\\').strip()
 world_name = os.path.basename(IN_PATH)
@@ -61,6 +63,8 @@ def categorise(name):
         return "tree_marker"
     if name == "foliage_marker":
         return "foliage_marker"
+    if name == "building_marker":
+        return "building"
     if name.endswith("_leaves"):
         return "leaf"
     if (name.endswith("_log") or name.endswith("_wood") or name.endswith("_hyphae")
@@ -97,6 +101,36 @@ if not voxels:
     print("No blocks found. Exiting.")
     exit(1)
 
+# colour each connected structure its own random green→blue shade. Building
+# blocks are flood-filled into components via 6-connectivity (face-adjacent),
+# and every block in a component is retagged with that component's material.
+building_mats = {}  # material name -> (r,g,b)
+building_set = {pos for pos, cat in voxels.items() if cat == "building"}
+if building_set:
+    NEIGH = [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
+    seen = set()
+    comp_id = 0
+    for start in building_set:
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        comp = []
+        while stack:
+            cx, cy, cz = stack.pop()
+            comp.append((cx, cy, cz))
+            for dx, dy, dz in NEIGH:
+                npos = (cx + dx, cy + dy, cz + dz)
+                if npos in building_set and npos not in seen:
+                    seen.add(npos)
+                    stack.append(npos)
+        mat = f"building_{comp_id}"
+        hue = random.uniform(0.333, 0.667)  # 0.333 green → 0.667 blue
+        building_mats[mat] = colorsys.hsv_to_rgb(hue, 0.90, 0.95)
+        for p in comp:
+            voxels[p] = mat
+        comp_id += 1
+
 # material colours
 MATERIALS = {
     "tree_marker":    (0.50, 0.00, 0.80),  # purple  — confirmed tree stumps
@@ -106,6 +140,7 @@ MATERIALS = {
     "stumpable":      (0.40, 0.40, 0.40),  # dark grey
     "other":          (0.72, 0.72, 0.72),  # light grey
 }
+MATERIALS.update(building_mats)  # per-structure green→blue materials
 
 with open(OUT_MTL, "w") as f:
     for mat, (r, g, b) in MATERIALS.items():
