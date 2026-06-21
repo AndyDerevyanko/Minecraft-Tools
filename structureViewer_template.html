@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>__WORLD_NAME__ — Structures</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #202225; }
+  #viewport { position: fixed; inset: 0; }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 16px;
+    background: rgba(20,20,24,0.72);
+    color: #e8e8ea;
+    font-family: Segoe UI, Arial, sans-serif;
+    font-size: 14px;
+    z-index: 10;
+  }
+  #hud button {
+    background: #3a3d44; color: #f0f0f2; border: 1px solid #56595f;
+    border-radius: 4px; padding: 6px 14px; font-size: 14px; cursor: pointer;
+  }
+  #hud button:hover { background: #4a4d54; }
+  #worldTitle { font-weight: 600; opacity: 0.85; }
+  #counter { min-width: 130px; }
+  #blockCount { opacity: 0.7; margin-left: auto; }
+  #hint { position: fixed; bottom: 8px; left: 16px; color: #ababab; font: 12px Segoe UI, Arial, sans-serif; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span id="worldTitle">__WORLD_NAME__</span>
+  <button id="prevBtn">&larr; Prev</button>
+  <span id="counter">Structure - / -</span>
+  <button id="nextBtn">Next &rarr;</button>
+  <span id="blockCount"></span>
+</div>
+<div id="hint">Drag: rotate &middot; Scroll: zoom &middot; Right-drag: pan &middot; Arrow keys: prev/next structure</div>
+<div id="viewport"></div>
+
+<script>
+  var STRUCTURES = __STRUCTURES_JSON__;
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+let scene, camera, renderer, controls, group;
+let idx = 0;
+const geomCache = new Map();
+const matCache = new Map();
+
+function getMaterial(hex) {
+  let m = matCache.get(hex);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color: hex, side: THREE.DoubleSide });
+    matCache.set(hex, m);
+  }
+  return m;
+}
+
+function box(w, h, d) {
+  const key = 'b:' + w + ',' + h + ',' + d;
+  let g = geomCache.get(key);
+  if (!g) { g = new THREE.BoxGeometry(w, h, d); geomCache.set(key, g); }
+  return g;
+}
+
+function plane(w, h) {
+  const key = 'p:' + w + ',' + h;
+  let g = geomCache.get(key);
+  if (!g) { g = new THREE.PlaneGeometry(w, h); geomCache.set(key, g); }
+  return g;
+}
+
+function facingYaw(facing) {
+  switch (facing) {
+    case 'north': return Math.PI;
+    case 'south': return 0;
+    case 'west': return Math.PI / 2;
+    case 'east': return -Math.PI / 2;
+    default: return 0;
+  }
+}
+
+function addMesh(parentGroup, geometry, material, x, y, z, rotY) {
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x, y, z);
+  if (rotY) mesh.rotation.y = rotY;
+  parentGroup.add(mesh);
+  return mesh;
+}
+
+// ── per-shape geometry builders (unit-block-local coordinates) ─────────────
+
+function buildStair(grp, mat, x, y, z, p) {
+  const half = p.half || 'bottom';
+  const shape = p.shape || 'straight';
+  const facing = p.facing || 'south';
+  const cx = x + 0.5, cz = z + 0.5;
+  const lowY = half === 'top' ? y + 0.75 : y + 0.25;
+  const highY = half === 'top' ? y + 0.25 : y + 0.75;
+
+  addMesh(grp, box(1, 0.5, 1), mat, cx, lowY, cz);
+
+  const wrap = new THREE.Group();
+  wrap.position.set(cx, highY, cz);
+  wrap.rotation.y = facingYaw(facing);
+  grp.add(wrap);
+
+  if (shape === 'outer_left' || shape === 'outer_right') {
+    const sign = shape === 'outer_left' ? -1 : 1;
+    addMesh(wrap, box(0.5, 0.5, 0.5), mat, sign * 0.25, 0, 0.25);
+  } else if (shape === 'inner_left' || shape === 'inner_right') {
+    const sign = shape === 'inner_left' ? -1 : 1;
+    addMesh(wrap, box(1, 0.5, 0.5), mat, 0, 0, 0.25);
+    addMesh(wrap, box(0.5, 0.5, 0.5), mat, sign * 0.25, 0, -0.25);
+  } else {
+    addMesh(wrap, box(1, 0.5, 0.5), mat, 0, 0, 0.25);
+  }
+}
+
+function buildFenceLike(grp, mat, x, y, z, p, cfg) {
+  const cx = x + 0.5, cz = z + 0.5;
+  const showPost = !cfg.wallMode || p.up !== 'false';
+  if (showPost) addMesh(grp, box(cfg.postW, cfg.postH, cfg.postW), mat, cx, y + cfg.postH / 2, cz);
+
+  const armLen = 0.5 - cfg.postW / 2;
+  const armOffset = cfg.postW / 2 + armLen / 2;
+  const armY = y + cfg.armH / 2 + cfg.armYOff;
+  const dirs = [['north', 0, -1], ['south', 0, 1], ['west', -1, 0], ['east', 1, 0]];
+  for (const [key, dx, dz] of dirs) {
+    const v = p[key];
+    const connected = cfg.wallMode ? (v !== undefined && v !== 'none') : (v === 'true');
+    if (!connected) continue;
+    const w = dx !== 0 ? armLen : cfg.postW;
+    const d = dz !== 0 ? armLen : cfg.postW;
+    addMesh(grp, box(w, cfg.armH, d), mat, cx + dx * armOffset, armY, cz + dz * armOffset);
+  }
+}
+
+function buildFenceGate(grp, mat, x, y, z, p) {
+  const facing = p.facing || 'south';
+  const open = p.open === 'true';
+  const cx = x + 0.5, cz = z + 0.5;
+  const wrap = new THREE.Group();
+  wrap.position.set(cx, y + 0.5, cz);
+  wrap.rotation.y = facingYaw(facing) + (open ? Math.PI / 2 : 0);
+  grp.add(wrap);
+  addMesh(wrap, box(1, 0.75, 0.125), mat, 0, 0, 0);
+}
+
+function buildDoor(grp, mat, x, y, z, p) {
+  const facing = p.facing || 'north';
+  const hinge = p.hinge || 'left';
+  const open = p.open === 'true';
+  const cx = x + 0.5, cz = z + 0.5;
+  let yaw = facingYaw(facing);
+  if (open) yaw += hinge === 'left' ? Math.PI / 2 : -Math.PI / 2;
+  const wrap = new THREE.Group();
+  wrap.position.set(cx, y + 0.5, cz);
+  wrap.rotation.y = yaw;
+  grp.add(wrap);
+  addMesh(wrap, box(1, 1, 0.1875), mat, 0, 0, 0.40625);
+}
+
+function buildTrapdoor(grp, mat, x, y, z, p) {
+  const facing = p.facing || 'north';
+  const half = p.half || 'bottom';
+  const open = p.open === 'true';
+  const cx = x + 0.5, cz = z + 0.5;
+  if (!open) {
+    const yy = half === 'top' ? y + 0.90625 : y + 0.09375;
+    addMesh(grp, box(1, 0.1875, 1), mat, cx, yy, cz);
+  } else {
+    const wrap = new THREE.Group();
+    wrap.position.set(cx, y + 0.5, cz);
+    wrap.rotation.y = facingYaw(facing);
+    grp.add(wrap);
+    addMesh(wrap, box(1, 1, 0.1875), mat, 0, 0, 0.40625);
+  }
+}
+
+function buildTorch(grp, mat, x, y, z, wallFacing) {
+  const cx = x + 0.5, cz = z + 0.5;
+  let ox = 0, oz = 0;
+  if (wallFacing) {
+    const off = 0.4;
+    if (wallFacing === 'north') oz = -off;
+    else if (wallFacing === 'south') oz = off;
+    else if (wallFacing === 'west') ox = -off;
+    else if (wallFacing === 'east') ox = off;
+  }
+  addMesh(grp, box(0.125, 0.625, 0.125), mat, cx + ox, y + 0.3125, cz + oz);
+  addMesh(grp, box(0.1875, 0.1875, 0.1875), mat, cx + ox, y + 0.65625, cz + oz);
+}
+
+function buildButton(grp, mat, x, y, z, facing) {
+  const cx = x + 0.5, cz = z + 0.5;
+  const off = 0.4375;
+  let px = cx, py = y + 0.5, pz = cz, sx = 0.25, sy = 0.375, sz = 0.25;
+  if (facing === 'up') { py = y + 0.0625; sx = 0.375; sy = 0.125; sz = 0.25; }
+  else if (facing === 'down') { py = y + 0.9375; sx = 0.375; sy = 0.125; sz = 0.25; }
+  else if (facing === 'north') { pz = cz - off; }
+  else if (facing === 'south') { pz = cz + off; }
+  else if (facing === 'west') { px = cx - off; sx = 0.125; sy = 0.375; sz = 0.25; }
+  else if (facing === 'east') { px = cx + off; sx = 0.125; sy = 0.375; sz = 0.25; }
+  addMesh(grp, box(sx, sy, sz), mat, px, py, pz);
+}
+
+function buildWallPlane(grp, mat, x, y, z, facing, heightFrac, liftFrac) {
+  const cx = x + 0.5, cz = z + 0.5;
+  const off = 0.5 - 0.03125;
+  let px = cx, pz = cz, rotY = 0;
+  if (facing === 'north') { pz = cz - off; rotY = 0; }
+  else if (facing === 'south') { pz = cz + off; rotY = Math.PI; }
+  else if (facing === 'west') { px = cx - off; rotY = Math.PI / 2; }
+  else if (facing === 'east') { px = cx + off; rotY = -Math.PI / 2; }
+  const py = y + 0.5 + (liftFrac || 0);
+  addMesh(grp, plane(1, heightFrac || 1), mat, px, py, pz, rotY);
+}
+
+function buildBed(grp, mat, x, y, z, p) {
+  const facing = p.facing || 'south';
+  const cx = x + 0.5, cz = z + 0.5;
+  addMesh(grp, box(1, 0.5625, 1), mat, cx, y + 0.28125, cz);
+  const wrap = new THREE.Group();
+  wrap.position.set(cx, y + 0.5625, cz);
+  wrap.rotation.y = facingYaw(facing);
+  grp.add(wrap);
+  addMesh(wrap, box(1, 0.1875, 0.3), mat, 0, 0.09375, -0.35);
+}
+
+function buildCross(grp, mat, x, y, z) {
+  const cx = x + 0.5, cy = y + 0.5, cz = z + 0.5;
+  addMesh(grp, plane(1, 1), mat, cx, cy, cz, Math.PI / 4);
+  addMesh(grp, plane(1, 1), mat, cx, cy, cz, -Math.PI / 4);
+}
+
+function buildBlock(grp, b) {
+  const cx = b.x + 0.5, cy = b.y + 0.5, cz = b.z + 0.5;
+  const mat = getMaterial(b.c);
+  const p = b.p || {};
+
+  switch (b.s) {
+    case 'cube':
+      if (b.t) {
+        const topMat = getMaterial(b.t);
+        const mesh = new THREE.Mesh(box(1, 1, 1), [mat, mat, topMat, mat, mat, mat]);
+        mesh.position.set(cx, cy, cz);
+        grp.add(mesh);
+      } else {
+        addMesh(grp, box(1, 1, 1), mat, cx, cy, cz);
+      }
+      break;
+    case 'inset_cube':
+      addMesh(grp, box(0.875, 1, 0.875), mat, cx, cy, cz);
+      break;
+    case 'slab': {
+      const type = p.type || 'bottom';
+      if (type === 'double') { addMesh(grp, box(1, 1, 1), mat, cx, cy, cz); break; }
+      addMesh(grp, box(1, 0.5, 1), mat, cx, cy + (type === 'top' ? 0.25 : -0.25), cz);
+      break;
+    }
+    case 'stair': buildStair(grp, mat, b.x, b.y, b.z, p); break;
+    case 'fence': buildFenceLike(grp, mat, b.x, b.y, b.z, p, { postW: 0.25, postH: 1.0, armH: 0.5, armYOff: 0.125 }); break;
+    case 'wall': buildFenceLike(grp, mat, b.x, b.y, b.z, p, { postW: 0.5, postH: 0.875, armH: 0.875, armYOff: -0.0625, wallMode: true }); break;
+    case 'pane': buildFenceLike(grp, mat, b.x, b.y, b.z, p, { postW: 0.125, postH: 1.0, armH: 1.0, armYOff: 0.0 }); break;
+    case 'fence_gate': buildFenceGate(grp, mat, b.x, b.y, b.z, p); break;
+    case 'door': buildDoor(grp, mat, b.x, b.y, b.z, p); break;
+    case 'trapdoor': buildTrapdoor(grp, mat, b.x, b.y, b.z, p); break;
+    case 'torch': buildTorch(grp, mat, b.x, b.y, b.z, null); break;
+    case 'wall_torch': buildTorch(grp, mat, b.x, b.y, b.z, p.facing || 'north'); break;
+    case 'carpet': addMesh(grp, box(1, 0.0625, 1), mat, cx, b.y + 0.03125, cz); break;
+    case 'pressure_plate': addMesh(grp, box(0.8125, 0.125, 0.8125), mat, cx, b.y + 0.0625, cz); break;
+    case 'button': buildButton(grp, mat, b.x, b.y, b.z, p.facing || 'up'); break;
+    case 'ladder': buildWallPlane(grp, mat, b.x, b.y, b.z, p.facing || 'north', 1, 0); break;
+    case 'wall_sign': buildWallPlane(grp, mat, b.x, b.y, b.z, p.facing || 'north', 0.6, 0.2); break;
+    case 'sign': {
+      addMesh(grp, box(0.125, 0.5, 0.125), mat, cx, b.y + 0.25, cz);
+      const rot = (parseInt(p.rotation || '0', 10) / 16) * Math.PI * 2;
+      addMesh(grp, box(0.875, 0.5, 0.0625), mat, cx, b.y + 0.625, cz, rot);
+      break;
+    }
+    case 'bed': buildBed(grp, mat, b.x, b.y, b.z, p); break;
+    case 'rail': addMesh(grp, box(1, 0.0625, 1), mat, cx, b.y + 0.03125, cz); break;
+    case 'layer': addMesh(grp, box(1, 0.125, 1), mat, cx, b.y + 0.0625, cz); break;
+    case 'chain': addMesh(grp, box(0.125, 1, 0.125), mat, cx, cy, cz); break;
+    case 'cross': buildCross(grp, mat, b.x, b.y, b.z); break;
+    default: addMesh(grp, box(1, 1, 1), mat, cx, cy, cz);
+  }
+}
+
+// ── scene plumbing ───────────────────────────────────────────────────────
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x202225);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.getElementById('viewport').appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const dir1 = new THREE.DirectionalLight(0xffffff, 0.85);
+  dir1.position.set(6, 12, 8);
+  scene.add(dir1);
+  const dir2 = new THREE.DirectionalLight(0xffffff, 0.3);
+  dir2.position.set(-7, -3, -9);
+  scene.add(dir2);
+
+  const grid = new THREE.GridHelper(64, 64, 0x444444, 0x333333);
+  scene.add(grid);
+
+  window.addEventListener('resize', onResize);
+  document.getElementById('prevBtn').addEventListener('click', () => loadStructure(idx - 1));
+  document.getElementById('nextBtn').addEventListener('click', () => loadStructure(idx + 1));
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') loadStructure(idx + 1);
+    if (e.key === 'ArrowLeft') loadStructure(idx - 1);
+  });
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function loadStructure(i) {
+  if (STRUCTURES.length === 0) return;
+  idx = ((i % STRUCTURES.length) + STRUCTURES.length) % STRUCTURES.length;
+
+  if (group) scene.remove(group);
+  group = new THREE.Group();
+  scene.add(group);
+
+  const s = STRUCTURES[idx];
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const b of s.blocks) {
+    if (b.x < minX) minX = b.x; if (b.x > maxX) maxX = b.x;
+    if (b.y < minY) minY = b.y; if (b.y > maxY) maxY = b.y;
+    if (b.z < minZ) minZ = b.z; if (b.z > maxZ) maxZ = b.z;
+    buildBlock(group, b);
+  }
+
+  const ccx = (minX + maxX) / 2 + 0.5, ccy = (minY + maxY) / 2 + 0.5, ccz = (minZ + maxZ) / 2 + 0.5;
+  group.position.set(-ccx, -ccy, -ccz);
+
+  const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4) + 6;
+  camera.position.set(size * 0.8, size * 0.7, size * 0.8);
+  camera.near = 0.1;
+  camera.far = size * 12;
+  camera.updateProjectionMatrix();
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  document.getElementById('counter').textContent = `Structure ${idx + 1} / ${STRUCTURES.length}`;
+  document.getElementById('blockCount').textContent = `${s.blocks.length} blocks`;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+init();
+loadStructure(0);
+animate();
+</script>
+</body>
+</html>

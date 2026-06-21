@@ -16,237 +16,96 @@ Kd 0.400 0.400 0.400
 newmtl other
 Kd 0.720 0.720 0.720
 
-newmtl building_61
-Kd 0.095 0.269 0.950
-
-newmtl building_39
-Kd 0.095 0.273 0.950
-
-newmtl building_8
-Kd 0.095 0.121 0.950
-
-newmtl building_73
-Kd 0.095 0.950 0.337
-
-newmtl building_36
-Kd 0.095 0.950 0.330
-
-newmtl building_27
-Kd 0.095 0.724 0.950
-
-newmtl building_24
-Kd 0.095 0.950 0.531
-
-newmtl building_32
-Kd 0.095 0.320 0.950
-
-newmtl building_20
-Kd 0.095 0.950 0.637
-
-newmtl building_45
-Kd 0.095 0.213 0.950
-
-newmtl building_18
-Kd 0.095 0.759 0.950
-
-newmtl building_6
-Kd 0.095 0.252 0.950
-
-newmtl building_42
-Kd 0.095 0.950 0.597
-
-newmtl building_9
-Kd 0.095 0.950 0.751
-
-newmtl building_40
-Kd 0.095 0.121 0.950
-
-newmtl building_51
-Kd 0.095 0.471 0.950
-
-newmtl building_56
-Kd 0.095 0.950 0.111
-
-newmtl building_15
-Kd 0.095 0.950 0.836
-
-newmtl building_41
-Kd 0.095 0.754 0.950
-
-newmtl building_48
-Kd 0.095 0.395 0.950
-
-newmtl building_31
-Kd 0.095 0.780 0.950
-
-newmtl building_33
-Kd 0.095 0.618 0.950
-
-newmtl building_28
-Kd 0.095 0.950 0.869
-
-newmtl building_63
-Kd 0.095 0.950 0.460
-
-newmtl building_23
-Kd 0.095 0.950 0.149
-
-newmtl building_26
-Kd 0.095 0.950 0.147
-
-newmtl building_62
-Kd 0.095 0.446 0.950
-
-newmtl building_72
-Kd 0.095 0.364 0.950
-
-newmtl building_60
-Kd 0.095 0.950 0.309
-
-newmtl building_69
-Kd 0.095 0.950 0.345
-
-newmtl building_67
-Kd 0.095 0.950 0.682
-
-newmtl building_43
-Kd 0.095 0.950 0.596
+newmtl building_17
+Kd 0.095 0.655 0.950
 
 newmtl building_25
-Kd 0.095 0.950 0.582
-
-newmtl building_77
-Kd 0.095 0.950 0.246
-
-newmtl building_22
-Kd 0.095 0.201 0.950
-
-newmtl building_70
-Kd 0.095 0.950 0.920
-
-newmtl building_34
-Kd 0.095 0.950 0.629
-
-newmtl building_50
-Kd 0.095 0.950 0.663
-
-newmtl building_65
-Kd 0.095 0.349 0.950
-
-newmtl building_53
-Kd 0.095 0.773 0.950
-
-newmtl building_29
-Kd 0.095 0.950 0.651
-
-newmtl building_17
-Kd 0.095 0.950 0.344
-
-newmtl building_2
-Kd 0.095 0.950 0.143
-
-newmtl building_5
-Kd 0.095 0.950 0.788
-
-newmtl building_52
-Kd 0.095 0.880 0.950
-
-newmtl building_55
-Kd 0.095 0.743 0.950
-
-newmtl building_58
-Kd 0.095 0.950 0.362
-
-newmtl building_14
-Kd 0.095 0.950 0.796
-
-newmtl building_19
-Kd 0.095 0.468 0.950
-
-newmtl building_57
-Kd 0.095 0.950 0.823
-
-newmtl building_11
-Kd 0.096 0.950 0.095
-
-newmtl building_54
-Kd 0.095 0.950 0.194
-
-newmtl building_68
-Kd 0.095 0.894 0.950
-
-newmtl building_38
-Kd 0.095 0.950 0.632
-
-newmtl building_74
-Kd 0.095 0.950 0.514
-
-newmtl building_59
-Kd 0.095 0.950 0.419
-
-newmtl building_4
-Kd 0.095 0.950 0.300
-
-newmtl building_0
-Kd 0.095 0.950 0.921
-
-newmtl building_64
-Kd 0.095 0.121 0.950
-
-newmtl building_12
-Kd 0.095 0.834 0.950
-
-newmtl building_30
-Kd 0.095 0.447 0.950
-
-newmtl building_10
-Kd 0.095 0.950 0.834
-
-newmtl building_37
-Kd 0.095 0.950 0.385
-
-newmtl building_49
-Kd 0.095 0.838 0.950
-
-newmtl building_1
-Kd 0.095 0.838 0.950
-
-newmtl building_35
-Kd 0.095 0.772 0.950
-
-newmtl building_7
-Kd 0.095 0.950 0.498
-
-newmtl building_44
-Kd 0.095 0.768 0.950
-
-newmtl building_66
-Kd 0.095 0.740 0.950
-
-newmtl building_16
-Kd 0.095 0.861 0.950
-
-newmtl building_21
-Kd 0.095 0.950 0.193
-
-newmtl building_46
-Kd 0.095 0.950 0.583
-
-newmtl building_75
-Kd 0.095 0.950 0.818
-
-newmtl building_13
-Kd 0.095 0.408 0.950
-
-newmtl building_76
 Kd 0.095 0.950 0.671
 
-newmtl building_47
-Kd 0.095 0.936 0.950
-
 newmtl building_3
-Kd 0.095 0.950 0.119
+Kd 0.095 0.950 0.800
 
-newmtl building_71
-Kd 0.095 0.950 0.218
+newmtl building_27
+Kd 0.095 0.651 0.950
+
+newmtl building_30
+Kd 0.095 0.950 0.481
+
+newmtl building_13
+Kd 0.095 0.263 0.950
+
+newmtl building_22
+Kd 0.095 0.530 0.950
+
+newmtl building_7
+Kd 0.095 0.276 0.950
+
+newmtl building_9
+Kd 0.095 0.360 0.950
+
+newmtl building_12
+Kd 0.095 0.950 0.639
+
+newmtl building_5
+Kd 0.095 0.114 0.950
+
+newmtl building_29
+Kd 0.095 0.637 0.950
+
+newmtl building_14
+Kd 0.095 0.153 0.950
+
+newmtl building_19
+Kd 0.095 0.912 0.950
+
+newmtl building_10
+Kd 0.095 0.950 0.695
+
+newmtl building_6
+Kd 0.095 0.950 0.401
+
+newmtl building_21
+Kd 0.095 0.950 0.720
+
+newmtl building_24
+Kd 0.095 0.495 0.950
+
+newmtl building_15
+Kd 0.095 0.215 0.950
+
+newmtl building_16
+Kd 0.095 0.265 0.950
+
+newmtl building_0
+Kd 0.095 0.292 0.950
+
+newmtl building_4
+Kd 0.095 0.950 0.807
+
+newmtl building_18
+Kd 0.095 0.264 0.950
+
+newmtl building_26
+Kd 0.095 0.950 0.277
+
+newmtl building_23
+Kd 0.095 0.388 0.950
+
+newmtl building_28
+Kd 0.095 0.950 0.569
+
+newmtl building_2
+Kd 0.095 0.612 0.950
+
+newmtl building_11
+Kd 0.095 0.950 0.326
+
+newmtl building_1
+Kd 0.095 0.619 0.950
+
+newmtl building_8
+Kd 0.095 0.950 0.177
+
+newmtl building_20
+Kd 0.095 0.610 0.950
 

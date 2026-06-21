@@ -287,12 +287,8 @@ int main()
     int n = (int)pos.size();
 
     std::cout << "Loaded " << n << " blocks  (dimension: " << dimension << ")" << std::endl;
-    if (n == 0)
-    {
-        std::cerr << "No blocks loaded." << std::endl;
-        gzclose(gz);
-        return 1;
-    }
+    // An empty world (e.g. a tiny test) is not an error — fall through and emit a
+    // valid header-only output world so the pipeline keeps going.
 
     // ── top-down building search ──────────────────────────────────────────────
     // Process blocks topmost-first so each connected structure is claimed in full

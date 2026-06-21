@@ -2,6 +2,7 @@ import os
 import sys
 import glob
 import time
+import shutil
 import subprocess
 
 SCRIPT_DIR       = os.path.dirname(os.path.abspath(__file__))
@@ -11,7 +12,18 @@ BUILDING_CATCHER = os.path.join(SCRIPT_DIR, "c++", "buildingCatcher", "buildingC
 # C++ compilation
 # ---------------------------------------------------------------------------
 
-COMPILER  = r"C:\msys64\mingw64\bin\g++.exe"
+# g++ location varies by msys2 environment (ucrt64 / mingw64 / clang64); fall back
+# to PATH. The old hardcoded mingw64 path silently skipped compilation when absent,
+# which left a stale exe running — so probe real locations instead.
+def _find_compiler():
+    for c in (r"C:\msys64\ucrt64\bin\g++.exe",
+              r"C:\msys64\mingw64\bin\g++.exe",
+              r"C:\msys64\clang64\bin\g++.exe"):
+        if os.path.isfile(c):
+            return c
+    return shutil.which("g++") or r"C:\msys64\ucrt64\bin\g++.exe"
+
+COMPILER  = _find_compiler()
 CPP_FLAGS = ["-std=c++20", "-O2"]
 
 # (display name, source path, output exe path).

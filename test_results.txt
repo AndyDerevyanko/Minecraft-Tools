@@ -20,15 +20,16 @@ VALIDATION
 =======================================================
   buildingCatcher.exe ...
 Please enter world file name + extension (ex. myworld_trees.world): Please enter world block ID list + extension (ex. myworld_trees.blockIds): Please enter dimension (overworld/nether/end): Loaded 3410005 blocks  (dimension: overworld)
-Search found 128 raw building components
-After merge: 78 buildings
-Marking 10644 building blocks
-Building data written to c:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.world
+Search found 168 raw building components
+Discarded 35 pure sandstone/terracotta components
+After merge: 31 buildings
+Marking 80850 building blocks
+Building data written to C:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.world
 
   renderer.py  (buildings) ...
 Enter path of world file fully: Does your world have any custom (modded) blocks? : SUCCESS: Voxels: 3410005, Vertices: 337758, Faces: 341548
-OBJ written to: c:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.obj
-MTL written to: c:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.mtl
+OBJ written to: C:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.obj
+MTL written to: C:\projects\Minecraft-Tools\TEST_medium_hard_trees_buildings.mtl
 
   Opening render: TEST_medium_hard_trees_buildings.obj ...
 
