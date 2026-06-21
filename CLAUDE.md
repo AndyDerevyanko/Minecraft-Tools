@@ -129,34 +129,86 @@ Write the world file with tree/leaf blocks replaced:
 
 ## buildingCatcher.cpp
 
-**Location:** `c++/buildingCatcher/buildingCatcher.cpp`  
-**Input:** `<stem>_trees.world` (treeRemover output)  
-**Output:** `<stem>_trees_buildings.world` + `.blockIds`
+**Location:** `c++/buildingCatcher/buildingCatcher.cpp`
+**Output:** `<stem>_buildings.world` + `<stem>_buildings.blockIds`
+(run on the treeRemover output, so in practice `<base>_trees_buildings.*`)
 
+**Stdin (3 lines, fed by run_tests.py):** world file, blockIds file, dimension
+(`overworld`/`nether`/`end`). The dimension is read for input-compatibility; it
+does not change classification. No blockProperties file is needed (no axis logic).
 
-### Key Types
+### What It Does
 
-```cpp
-using XZ    = std::pair<int,int>;
-using XZSet = std::unordered_set<XZ, XZHash>;
-using XZMap = std::unordered_map<XZ, block, XZHash>;
-```
+Reads the post-treeRemover world, finds player-built structures, and rewrites every
+building block as a synthetic `building_marker`. Each building gets a component id,
+stored in the **prop field** of its markers — renderer.py colours by that prop.
 
-`packXYZ(x,y,z)` → `int64_t` key used in `globalVisited` / `buildingCoords`.
+### Natural vs Unnatural Classification (`naturalByName`)
 
-### Natural Block Classification (`isNatural`)
+The search hinges on a per-block-type natural/unnatural split. **Unnatural = building.**
 
-Dimension-gated. Three sets:
-- `kNaturalSet` — universal (stone, dirt, grass, ores via `ends_with("_ore")`, water, leaves via `ends_with("_leaves")`, etc.)
-- `kNetherNaturalSet` — netherrack, soul sand, glowstone, etc. (only natural in NETHER)
-- `kEndNaturalSet` — end_stone, chorus_flower, chorus_plant (only natural in END)
+- **Natural:** terrain (dirt/stone/deepslate/sand/gravel/clay/ores via `_ore`),
+  fluids, vegetation (grass, flowers, crops, vines, mushrooms, saplings via
+  `_sapling`), coral, ice/snow, nether & end terrain, amethyst, raw iron/copper
+  ore-vein blocks, and treeRemover's own `tree_marker` / `foliage_marker`.
+- **Unnatural (building):** everything else — planks, stairs, slabs, fences, walls,
+  glass, wool, carpet, bricks, cobblestone, quartz, furnaces/chests/etc.
+- **Wood / logs / leaves are UNNATURAL** (trees were already removed, so leftovers
+  are player-placed material). Exceptions kept natural: `azalea_leaves` /
+  `flowering_azalea_leaves` (azalea isn't a treeRemover variety, so it survives).
+- **Crops are natural** (`wheat`, `carrots`, `potatoes`, `beetroots`, pumpkin/melon
+  stems, …) so a tilled field doesn't 8-connect into one giant "building".
+- **Path blocks (`dirt_path`, `grass_path`) are UNNATURAL** (player-made).
+- **Sandstone & terracotta variants are UNNATURAL** (so builds made of them are
+  caught) — but see the discard rule below, which removes natural terrain made of
+  them.
 
-Also: `ends_with("_terracotta")` without "glazed" → natural (badlands terrain), `find("_coral") != npos` → natural.
+### Algorithm
 
-Anything NOT natural → **unnatural** → candidate for building detection.
+**Phase 1 — Top-down search (per building):**
 
-`isWoodOrLog()` — logs/wood/hyphae/stems (unnatural but used for the all-wood filter).  
-`isMarker()` — tree_marker, foliage_marker, building_marker: always skipped.
+Blocks are processed topmost-first so a connected structure is fully claimed by the
+search starting at its highest unnatural block. For each unclaimed unnatural seed,
+walk down layer-by-layer with an `active` candidate set (initially just the seed):
+1. If the current (descended) layer holds **no unnatural block**, it is **fully
+   natural → discard that layer and stop** the search.
+2. Otherwise pull the **whole layer (natural AND unnatural) into the building**,
+   then grow it across the plane with an **8-connected BFS through unnatural blocks
+   only** (naturals are absorbed but never propagate the BFS).
+3. **Descend:** collect the **3×3 footprint below** every block of this layer
+   (naturals included), deduped via a set so each lower cell is examined once.
+
+Net effect: an interior dirt floor (a layer that still has walls) is absorbed; the
+all-natural ground layer under the lowest wall is the stop condition and is dropped,
+so flat terrain isn't swallowed.
+
+**Phase 2 — Discard pure terrain:**
+
+A component whose **unnatural blocks are all a single discardable type**
+(`discardableByName`: one kind of sandstone or terracotta — full blocks only, not
+stairs/slabs/walls, and not glazed terracotta) is assumed to be natural
+desert/badlands terrain, not a build, and is unclaimed. Absorbed natural blocks do
+not count toward type-uniformity.
+
+**Phase 3 — Merge (6-connectivity, U/D/L/R/F/B, no diagonals):**
+
+Union-find over components:
+- Two components that touch **face-to-face** are merged.
+- If a single **natural block (or one natural layer)** is sandwiched in a straight
+  line between two components, they are merged **and that sandwiched block becomes a
+  building block**.
+
+**Phase 4 — Output:**
+
+- Surviving components get contiguous colour ids (discarded/empty ones skipped).
+- Every building block (incl. absorbed naturals and sandwiched naturals) →
+  `building_marker`, with the colour id written into the **prop** field.
+- All other blocks → written through unchanged.
+- `id/prop` byte width is widened if the new marker id or the largest colour id no
+  longer fits the original width.
+- `building_marker` is appended to the output `.blockIds` as `maxBlockID+1`.
+
+---
 
 
 ## renderer.py

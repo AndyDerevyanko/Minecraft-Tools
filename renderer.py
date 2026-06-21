@@ -95,41 +95,25 @@ with gzip.open(IN_PATH, "rb") as wf:
             x = decode_coord(int.from_bytes(data[off : off + X_BYTES], "little"), X_BYTES); off += X_BYTES
             y = decode_coord(int.from_bytes(data[off : off + Y_BYTES], "little"), Y_BYTES); off += Y_BYTES
             z = decode_coord(int.from_bytes(data[off : off + Z_BYTES], "little"), Z_BYTES)
-            voxels[(x, y, z)] = id_cat.get(block_id, "other")
+            cat = id_cat.get(block_id, "other")
+            if cat == "building":
+                # buildingCatcher stores the structure id in the prop field, so
+                # each detected structure keeps its own identity (and colour)
+                # instead of being re-merged by raw adjacency here.
+                prop = int.from_bytes(data[bi + IDS_OFF + ID_PROP_BYTES : bi + IDS_OFF + 2 * ID_PROP_BYTES], "little")
+                cat = f"building_{prop}"
+            voxels[(x, y, z)] = cat
 
 if not voxels:
     print("No blocks found. Exiting.")
     exit(1)
 
-# colour each connected structure its own random green→blue shade. Building
-# blocks are flood-filled into components via 6-connectivity (face-adjacent),
-# and every block in a component is retagged with that component's material.
+# give every structure id its own random green→blue shade
 building_mats = {}  # material name -> (r,g,b)
-building_set = {pos for pos, cat in voxels.items() if cat == "building"}
-if building_set:
-    NEIGH = [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
-    seen = set()
-    comp_id = 0
-    for start in building_set:
-        if start in seen:
-            continue
-        stack = [start]
-        seen.add(start)
-        comp = []
-        while stack:
-            cx, cy, cz = stack.pop()
-            comp.append((cx, cy, cz))
-            for dx, dy, dz in NEIGH:
-                npos = (cx + dx, cy + dy, cz + dz)
-                if npos in building_set and npos not in seen:
-                    seen.add(npos)
-                    stack.append(npos)
-        mat = f"building_{comp_id}"
+for cat in set(voxels.values()):
+    if cat.startswith("building_"):
         hue = random.uniform(0.333, 0.667)  # 0.333 green → 0.667 blue
-        building_mats[mat] = colorsys.hsv_to_rgb(hue, 0.90, 0.95)
-        for p in comp:
-            voxels[p] = mat
-        comp_id += 1
+        building_mats[cat] = colorsys.hsv_to_rgb(hue, 0.90, 0.95)
 
 # material colours
 MATERIALS = {
