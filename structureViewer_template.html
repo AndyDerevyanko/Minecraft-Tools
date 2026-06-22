@@ -341,24 +341,36 @@ function onResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+function disposeGroup(g) {
+  // cube-mesh geometries are built fresh per structure (unlike the cached
+  // unit shapes from box()/plane()) and must be freed or GPU memory grows
+  // every time the user clicks Next/Prev.
+  g.traverse((obj) => {
+    if (obj.isMesh && obj.userData.ownGeometry) obj.geometry.dispose();
+  });
+}
+
 function loadStructure(i) {
   if (STRUCTURES.length === 0) return;
   idx = ((i % STRUCTURES.length) + STRUCTURES.length) % STRUCTURES.length;
 
-  if (group) scene.remove(group);
+  if (group) { scene.remove(group); disposeGroup(group); }
   group = new THREE.Group();
   scene.add(group);
 
   const s = STRUCTURES[idx];
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const b of s.blocks) {
-    if (b.x < minX) minX = b.x; if (b.x > maxX) maxX = b.x;
-    if (b.y < minY) minY = b.y; if (b.y > maxY) maxY = b.y;
-    if (b.z < minZ) minZ = b.z; if (b.z > maxZ) maxZ = b.z;
-    buildBlock(group, b);
-  }
 
+  for (const cm of s.cubeMeshes) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(cm.pos, 3));
+    geom.setAttribute('normal', new THREE.Float32BufferAttribute(cm.nrm, 3));
+    const mesh = new THREE.Mesh(geom, getMaterial(cm.color));
+    mesh.userData.ownGeometry = true;
+    group.add(mesh);
+  }
+  for (const b of s.blocks) buildBlock(group, b);
+
+  const [minX, minY, minZ, maxX, maxY, maxZ] = s.bbox;
   const ccx = (minX + maxX) / 2 + 0.5, ccy = (minY + maxY) / 2 + 0.5, ccz = (minZ + maxZ) / 2 + 0.5;
   group.position.set(-ccx, -ccy, -ccz);
 
@@ -371,7 +383,7 @@ function loadStructure(i) {
   controls.update();
 
   document.getElementById('counter').textContent = `Structure ${idx + 1} / ${STRUCTURES.length}`;
-  document.getElementById('blockCount').textContent = `${s.blocks.length} blocks`;
+  document.getElementById('blockCount').textContent = `${s.count} blocks`;
 }
 
 function animate() {

@@ -421,6 +421,41 @@ int main()
         std::cout << "Discarded " << discarded << " pure sandstone/terracotta components" << std::endl;
     }
 
+    // ── discard tiny single-block-type components (size <= 5) ─────────────────
+    // NEW rule, independent of the sandstone/terracotta discard above: any
+    // component with 5 or fewer total blocks (natural + unnatural) where every
+    // single block is the exact same type is almost certainly noise (a stray
+    // leftover cluster), not a real build — unclaim it. A lone unnatural block
+    // with nothing absorbed (size 1) is the most common case this catches.
+    {
+        std::vector<int> tinySize(compCount, 0);
+        std::vector<int> tinyType(compCount, -2); // -2 = unseen, -3 = mixed
+        for (int i = 0; i < n; i++)
+        {
+            if (comp[i] < 0) continue;
+            int c = comp[i];
+            tinySize[c]++;
+            if (tinyType[c] == -2) tinyType[c] = btype[i];
+            else if (tinyType[c] != btype[i]) tinyType[c] = -3;
+        }
+
+        std::vector<char> discardTiny(compCount, 0);
+        int discardedTiny = 0;
+        for (int c = 0; c < compCount; c++)
+            if (tinySize[c] > 0 && tinySize[c] <= 5 && tinyType[c] >= 0)
+            {
+                discardTiny[c] = 1;
+                discardedTiny++;
+            }
+
+        if (discardedTiny)
+            for (int i = 0; i < n; i++)
+                if (comp[i] >= 0 && discardTiny[comp[i]])
+                    comp[i] = -1;
+
+        std::cout << "Discarded " << discardedTiny << " tiny single-block-type components (<=5 blocks)" << std::endl;
+    }
+
     // ── merge touching buildings (6-connectivity, no diagonals) ───────────────
     // Direct face contact merges two components. A single natural block (or one
     // natural layer) sandwiched in a straight line between two components also

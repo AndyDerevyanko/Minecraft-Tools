@@ -398,9 +398,70 @@ def build_structures(buildings_world_path):
                 block["p"] = kv
             blocks.append(block)
         if blocks:
-            structures.append({"id": comp_id, "blocks": blocks})
+            structures.append(make_structure(comp_id, blocks))
 
     return structures
+
+
+# ── face culling for plain cubes ─────────────────────────────────────────────
+# Plain full-cube blocks are the overwhelming majority of any structure, and a
+# separate Mesh per block (one draw call each) is what made the viewer slow.
+# Cull the faces shared between two adjacent cubes the same way renderer.py
+# does for the whole-world .obj, and merge every remaining exposed quad of a
+# given color into one triangle-soup mesh. Non-cube shapes (stairs, fences,
+# etc.) are comparatively rare and keep their existing individual-mesh path.
+
+_CUBE_FACES = [
+    ((0, 0, -1), [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]),
+    ((0, 0, 1), [(0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)]),
+    ((0, -1, 0), [(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)]),
+    ((0, 1, 0), [(0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1)]),
+    ((-1, 0, 0), [(0, 0, 0), (0, 1, 0), (0, 1, 1), (0, 0, 1)]),
+    ((1, 0, 0), [(1, 0, 0), (1, 1, 0), (1, 1, 1), (1, 0, 1)]),
+]
+
+
+def make_structure(comp_id, blocks):
+    min_x = min(b["x"] for b in blocks); max_x = max(b["x"] for b in blocks)
+    min_y = min(b["y"] for b in blocks); max_y = max(b["y"] for b in blocks)
+    min_z = min(b["z"] for b in blocks); max_z = max(b["z"] for b in blocks)
+
+    cube_blocks = [b for b in blocks if b["s"] == "cube"]
+    other_blocks = [b for b in blocks if b["s"] != "cube"]
+    occupied = {(b["x"], b["y"], b["z"]) for b in cube_blocks}
+
+    # color hex -> (positions, normals), both flat float lists, 3 per vertex
+    buckets = {}
+
+    def bucket(color):
+        if color not in buckets:
+            buckets[color] = ([], [])
+        return buckets[color]
+
+    for b in cube_blocks:
+        x, y, z = b["x"], b["y"], b["z"]
+        side_color = b["c"]
+        for (nx, ny, nz), corners in _CUBE_FACES:
+            if (x + nx, y + ny, z + nz) in occupied:
+                continue  # face touches another cube in this structure — hidden
+            face_color = b["t"] if (b.get("t") and (nx, ny, nz) == (0, 1, 0)) else side_color
+            pos, nrm = bucket(face_color)
+            verts = [(x + cx, y + cy, z + cz) for cx, cy, cz in corners]
+            # two triangles per quad (0,1,2) and (0,2,3); normal is identical per vertex
+            for tri in ((verts[0], verts[1], verts[2]), (verts[0], verts[2], verts[3])):
+                for vx, vy, vz in tri:
+                    pos.extend((vx, vy, vz))
+                    nrm.extend((nx, ny, nz))
+
+    cube_meshes = [{"color": color, "pos": pos, "nrm": nrm} for color, (pos, nrm) in buckets.items()]
+
+    return {
+        "id": comp_id,
+        "blocks": other_blocks,
+        "cubeMeshes": cube_meshes,
+        "bbox": [min_x, min_y, min_z, max_x, max_y, max_z],
+        "count": len(blocks),
+    }
 
 
 def write_viewer(structures, world_base, out_path):
@@ -432,7 +493,7 @@ def main():
     out_path = base + "_structures.html"
     write_viewer(structures, world_name, out_path)
 
-    total_blocks = sum(len(s["blocks"]) for s in structures)
+    total_blocks = sum(s["count"] for s in structures)
     print(f"Wrote {len(structures)} structure(s), {total_blocks} blocks total -> {out_path}")
     webbrowser.open("file://" + os.path.abspath(out_path))
 

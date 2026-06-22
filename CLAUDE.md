@@ -190,6 +190,13 @@ stairs/slabs/walls, and not glazed terracotta) is assumed to be natural
 desert/badlands terrain, not a build, and is unclaimed. Absorbed natural blocks do
 not count toward type-uniformity.
 
+A **separate, independent** rule then discards any component with **5 or fewer
+total blocks (natural + unnatural) where every single block is the exact same
+type** — almost certainly a stray noise cluster, not a real build (a lone
+unclaimed block, size 1, is the most common case). This applies to *any* block
+type, not just sandstone/terracotta, and naturals count toward both the size and
+the uniformity check here (unlike the sandstone/terracotta rule above).
+
 **Phase 3 — Merge (6-connectivity, U/D/L/R/F/B, no diagonals):**
 
 Union-find over components:
