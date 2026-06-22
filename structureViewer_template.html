@@ -323,9 +323,6 @@ function init() {
   dir2.position.set(-7, -3, -9);
   scene.add(dir2);
 
-  const grid = new THREE.GridHelper(64, 64, 0x444444, 0x333333);
-  scene.add(grid);
-
   window.addEventListener('resize', onResize);
   document.getElementById('prevBtn').addEventListener('click', () => loadStructure(idx - 1));
   document.getElementById('nextBtn').addEventListener('click', () => loadStructure(idx + 1));
